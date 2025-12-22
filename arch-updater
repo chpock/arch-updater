@@ -1,4 +1,4 @@
-#!/bin/dash
+#!/bin/sh
 
 set -e
 
@@ -407,12 +407,6 @@ while true; do
             fi
         fi
     done < "$UPGRADE_PACKAGE_LIST_FILE"
-
-    # cat "$UPGRADE_PACKAGE_LIST_FILE"
-    # exit 123
-
-    # time "$SELF_FILE" -list
-    # exit 123
 
     SELECTED="$("$SELF_FILE" -list | fzf --ansi --disabled --reverse --no-input \
         --highlight-line \
