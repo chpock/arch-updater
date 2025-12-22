@@ -1,0 +1,497 @@
+#!/bin/dash
+
+set -e
+
+generateAnsiColors() {
+    for i in 0:BLACK 1:RED 2:GREEN 3:YELLOW 4:BLUE 5:MAGENTA 6:CYAN 7:WHITE; do
+        NAME="${i#*:}"
+        CODE="${i%:*}"
+        F_CODE=$(( CODE + 30 ))
+        FB_CODE=$(( CODE + 90 ))
+        if [ "$1" = "shell" ]; then
+            printf "%s='\033[0;%im' " "$NAME" "$F_CODE"
+            printf "H_%s='\033[0;%im' " "$NAME" "$FB_CODE"
+        else
+            printf -- "-v %s=\033[0;%im " "$NAME" "$F_CODE"
+            printf -- "-v H_%s=\033[0;%im " "$NAME" "$FB_CODE"
+        fi
+    done
+    if [ "$1" = "shell" ]; then
+        printf "RESET='\033[0m' "
+    else
+        printf -- "-v RESET=\033[0m "
+    fi
+}
+
+eval "$(generateAnsiColors shell)"
+AWK_COLORS="$(generateAnsiColors awk)"
+
+NL='
+'
+
+if [ -n "$UPGRADE_PACKAGE_LIST_FILE" ] \
+    && [ -n "$UPGRADE_SKIP_LIST_FILE" ] \
+    && [ -n "$UNIMPORTANT_PACKAGE_LIST_FILE" ] \
+    && [ -n "$PACKAGE_INFO_CACHE_DIR" ]
+then
+
+    UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
+    UNIMPORTANT_PACKAGE_LIST=" $(cat "$UNIMPORTANT_PACKAGE_LIST_FILE") "
+
+    if command -v arch-log >/dev/null 2>&1; then
+        HAS_ARCHLOG=1
+    else
+        HAS_ARCHLOG=0
+    fi
+
+    getPackageInfo() {
+
+        INFO_KIND="$1"
+        PACKAGE="$(echo "$2" | awk '{print $3}')"
+        SOURCE="$(echo "$2" | awk '{print $2}')"
+        VER_OLD="$(echo "$2" | awk '{print $4}')"
+        PACKAGE_INFO_CACHE_INFO="$PACKAGE_INFO_CACHE_DIR/info.$PACKAGE"
+        PACKAGE_INFO_CACHE_URL="$PACKAGE_INFO_CACHE_DIR/url.$PACKAGE"
+        PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+
+        if [ ! -e "$PACKAGE_INFO_CACHE_INFO" ]; then
+            {
+                if [ "$SOURCE" = "[PAC]" ]; then
+                    # pacman -Si "$PACKAGE" --color never | sed -n '/^Repository/,/^$/p' | awk '/^Repository/ {count++} count==1'
+                    pacman -Qi "$PACKAGE" --color never
+                elif [ "$SOURCE" = "[AUR]" ]; then
+                    yay -Qi "$PACKAGE" --color never
+                fi
+            } | while IFS= read -r LINE; do
+                case "$LINE" in
+                    URL\ *)
+                        echo "$LINE" | sed 's/^[^:]*: //' > "$PACKAGE_INFO_CACHE_URL"
+                        # shellcheck disable=SC2153
+                        LINE="$(echo "$LINE" | sed "s/^\([^:]*: \)\(.*\)/\1${H_BLUE}\2${RESET}/")"
+                        ;;
+                esac
+                echo "$LINE" >> "$PACKAGE_INFO_CACHE_INFO"
+            done
+        fi
+
+        if [ "$INFO_KIND" = "info" ]; then
+
+            cat "$PACKAGE_INFO_CACHE_INFO"
+
+            if [ "$HAS_ARCHLOG" -eq 1 ]; then
+                if [ ! -e "$PACKAGE_INFO_CACHE_ARCHLOG" ]; then
+                    STOP_VERSION="${VER_OLD%-*}"
+                    # In dash, string replacement is not supported.
+                    STOP_VERSION="$(echo "$STOP_VERSION" | tr ':' '-')"
+                    STOP_REVISION="${VER_OLD##*-}"
+                    STOP_REVISION="${STOP_REVISION%%.*}"
+                    # We cache output to variable OUTPUT and then write the output
+                    # to corresponding file. This trick will help to avoid creating
+                    # an empty file if fzf killed the preview generation process.
+                    #
+                    # shellcheck disable=SC2086
+                    OUTPUT="$(
+                        arch-log "$PACKAGE" --reverse --number 50 \
+                            | awk $AWK_COLORS \
+                                -v STOP_VERSION="$STOP_VERSION" \
+                                -v STOP_REVISION="$STOP_REVISION" \
+                                '
+                                    /^\* [0-9]{4}-[0-9]{2}-[0-9]{2} +\([^)]+\) / {
+                                        match($0, /( +\(([^)]+)-([0-9]+)\))( .*)/, groups)
+                                        if (groups[2] == STOP_VERSION && groups[3] < STOP_REVISION) {
+                                            exit
+                                        }
+                                        print GREEN $1, YELLOW $2 GREEN groups[1] RESET groups[4]
+                                        if (groups[2] == STOP_VERSION && groups[3] == STOP_REVISION) {
+                                            exit
+                                        }
+                                        next
+                                    }
+
+                                    /^\* [0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+                                        match($0, /([0-9]{4}-[0-9]{2}-[0-9]{2})( .*)/, groups)
+                                        print GREEN $1, YELLOW groups[1] RESET groups[2]
+                                        next
+                                    }
+
+                                    {
+                                        print $0
+                                    }
+                                '
+                    )"
+                    echo "$OUTPUT" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+                    echo "$OUTPUT"
+                else
+                    cat "$PACKAGE_INFO_CACHE_ARCHLOG"
+                fi
+            fi
+
+        elif [ "$INFO_KIND" = "url" ]; then
+
+            [ ! -e "$PACKAGE_INFO_CACHE_URL" ] || cat "$PACKAGE_INFO_CACHE_URL"
+
+        fi
+
+    }
+
+    if [ "$1" = "-upgrade-all" ]; then
+
+        echo > "$UPGRADE_SKIP_LIST_FILE"
+
+    elif [ "$1" = "-skip-all" ]; then
+
+        UPGRADE_SKIP_LIST=' '
+        while read -r PACKAGE _; do
+            UPGRADE_SKIP_LIST="$UPGRADE_SKIP_LIST$PACKAGE "
+        done < "$UPGRADE_PACKAGE_LIST_FILE"
+        echo "$UPGRADE_SKIP_LIST" > "$UPGRADE_SKIP_LIST_FILE"
+
+    elif [ "$1" = "-preview" ]; then
+
+        getPackageInfo "info" "$2"
+
+    elif [ "$1" = "-open-url" ]; then
+
+        URL="$(getPackageInfo "url" "$2")"
+        [ -z "$URL" ] || xdg-open "$URL"
+
+    elif [ "$1" = "-list" ]; then
+
+        if [ -n "$FZF_PREVIEW_LEFT" ]; then
+            COLUMNS=$(( FZF_PREVIEW_LEFT - 1 - 1 - 2 ))
+        else
+            COLUMNS="$(tput cols)"
+            COLUMNS=$(( COLUMNS / 2 - 1 - 1 ))
+        fi
+
+        LIST_UNIMPORTANT=""
+
+        # shellcheck disable=SC2059
+        getLine() {
+            if [ "$IS_SKIP" -eq 0 ]; then
+                printf "${H_BLACK}[${GREEN}UPGR${H_BLACK}]${RESET} "
+            else
+                printf "${H_BLACK}[${RED}SKIP${H_BLACK}]${RESET} "
+            fi
+
+            case "$SOURCE" in
+                P) printf "${H_BLACK}[${BLUE}PAC${H_BLACK}]${RESET} ";;
+                A) printf "${H_BLACK}[${YELLOW}AUR${H_BLACK}]${RESET} ";;
+            esac
+
+            if [ "$IS_UNIMPORTANT" -eq 0 ]; then
+                printf "${H_WHITE}%s${RESET} " "$PACKAGE"
+            else
+                printf "${RESET}%s " "$PACKAGE"
+            fi
+
+            printf "${CYAN}%s${RESET} " "$VER_OLD"
+
+            printf "${H_BLACK}->${RESET} "
+
+            if [ "$PREFIX" != "-" ]; then
+                printf "${MAGENTA}%s" "$PREFIX"
+            fi
+
+            if [ "$REST" != "-" ]; then
+                printf "${H_MAGENTA}%s" "$REST"
+            fi
+
+            printf "${H_BLACK}-${MAGENTA}%s${RESET}" "$REVISION"
+
+            if [ "$DEP" -eq 1 ]; then
+                WIDTH=$(( 6 + 1 + 5 + 1 + 1 + 1 + 2 + 1 + LEN_ALL ))
+                WIDTH=$(( WIDTH + 6 ))
+                if [ $WIDTH -lt $COLUMNS ]; then
+                    printf "%$(( COLUMNS - WIDTH ))s" ''
+                else
+                    printf ' '
+                fi
+                printf "${H_BLACK}(dep)${RESET}"
+            fi
+
+            echo
+        }
+
+        while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
+            case "$UNIMPORTANT_PACKAGE_LIST" in
+                *" $PACKAGE "*) IS_UNIMPORTANT=1;;
+                *) IS_UNIMPORTANT=0;;
+            esac
+            case "$UPGRADE_SKIP_LIST" in
+                *" $PACKAGE "*) IS_SKIP=1;;
+                *) IS_SKIP=0;;
+            esac
+            if [ "$IS_UNIMPORTANT" -eq 0 ]; then
+                getLine
+            else
+                LIST_UNIMPORTANT="$LIST_UNIMPORTANT$(getLine)$NL"
+            fi
+        done < "$UPGRADE_PACKAGE_LIST_FILE"
+
+        [ -z "$LIST_UNIMPORTANT" ] || printf '%s' "$LIST_UNIMPORTANT"
+
+    elif [ "$1" = "-toggle-group" ]; then
+
+        PACKAGE="$(echo "$2" | awk '{print $3}')"
+        if [ "${UNIMPORTANT_PACKAGE_LIST#*" $PACKAGE "}" = "$UNIMPORTANT_PACKAGE_LIST" ]; then
+            UNIMPORTANT_PACKAGE_LIST="$UNIMPORTANT_PACKAGE_LIST $PACKAGE"
+        else
+            UNIMPORTANT_PACKAGE_LIST="${UNIMPORTANT_PACKAGE_LIST%" $PACKAGE "*} ${UNIMPORTANT_PACKAGE_LIST#*" $PACKAGE "}"
+        fi
+        echo "$UNIMPORTANT_PACKAGE_LIST" > "$UNIMPORTANT_PACKAGE_LIST_FILE"
+
+    elif [ "$1" = "-toggle-skip" ]; then
+
+        PACKAGE="$(echo "$2" | awk '{print $3}')"
+        if [ "${UPGRADE_SKIP_LIST#*" $PACKAGE "}" = "$UPGRADE_SKIP_LIST" ]; then
+            UPGRADE_SKIP_LIST="$UPGRADE_SKIP_LIST $PACKAGE"
+        else
+            UPGRADE_SKIP_LIST="${UPGRADE_SKIP_LIST%" $PACKAGE "*} ${UPGRADE_SKIP_LIST#*" $PACKAGE "}"
+        fi
+        echo "$UPGRADE_SKIP_LIST" > "$UPGRADE_SKIP_LIST_FILE"
+
+    fi
+
+    exit 0
+fi
+
+SELF_DIR="$(cd "$(dirname "$0")"; pwd)"
+SELF_FILE="$SELF_DIR/$(basename "$0")"
+
+# shellcheck disable=SC2329
+cleanup() {
+    set +e
+    {
+        for TEMP_FN in \
+            "$UPGRADE_PACKAGE_LIST_FILE" \
+            "$UPGRADE_SKIP_LIST_FILE" \
+            "$PACKAGE_LIST_PACMAN" \
+            "$PACKAGE_LIST_AUR"
+        do
+            [ -z "$TEMP_FN" ] || rm -f "$TEMP_FN"
+        done
+        [ -z "$PACKAGE_INFO_CACHE_DIR" ] || rm -rf "$PACKAGE_INFO_CACHE_DIR"
+    } >/dev/null 2>&1
+    exit "$1"
+}
+
+trap 'cleanup $?' EXIT INT TERM HUP
+
+unset UNIMPORTANT_PACKAGE_LIST_FILE UPGRADE_PACKAGE_LIST_FILE UPGRADE_SKIP_LIST_FILE PACKAGE_INFO_CACHE_DIR
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/arch-updater"
+mkdir -p "$CONFIG_DIR"
+UNIMPORTANT_PACKAGE_LIST_FILE="$CONFIG_DIR/unimportant-packages.list"
+export UNIMPORTANT_PACKAGE_LIST_FILE
+[ -e "$UNIMPORTANT_PACKAGE_LIST_FILE" ] || touch "$UNIMPORTANT_PACKAGE_LIST_FILE"
+
+UPGRADE_PACKAGE_LIST_FILE="$(mktemp)"
+export UPGRADE_PACKAGE_LIST_FILE
+
+UPGRADE_SKIP_LIST_FILE="$(mktemp)"
+export UPGRADE_SKIP_LIST_FILE
+
+PACKAGE_INFO_CACHE_DIR="$(mktemp -d)"
+export PACKAGE_INFO_CACHE_DIR
+
+HEADER="$(printf '%s\n' \
+    "SPACE:     Toggle skip/upgrade | CTRL-A: Upgrade all       | CTRL-U: Skip all" \
+    "ENTER:     Open URL            | CTRL-S: Toggle importance" \
+    "ALT-ENTER: Start upgrade       | ESC:    Exit" \
+)"
+
+while true; do
+
+    echo
+    echo "Get pacman updated package list..."
+    PACKAGE_LIST_PACMAN="$(mktemp)"
+    checkupdates --nocolor > "$PACKAGE_LIST_PACMAN"
+
+    echo "Get AUR updated package list..."
+    PACKAGE_LIST_AUR="$(mktemp)"
+    yay -Qua --color never > "$PACKAGE_LIST_AUR"
+
+    {
+        pacman -Qd | tr '\n' ' ' | awk '
+            NR == FNR {
+                for (i = 1; i <= NF; i++) {
+                    dep[$i] = 1
+                }
+                next
+            }
+
+            {
+                if ($1 in dep) {
+                    print $1, $2, $4, "P", "1"
+                } else {
+                    print $1, $2, $4, "P", "0"
+                }
+            }
+        ' - "$PACKAGE_LIST_PACMAN"
+        awk '
+            {
+                print $1, $2, $4, "A", "0"
+            }
+        ' "$PACKAGE_LIST_AUR"
+    } | sort | awk '
+        {
+            len1 = length($2)
+            len2 = length($3)
+            len_all = length($1) + len1 + len2
+            min_len = (len1 < len2) ? len1 : len2
+            prefix = ""
+            revision = ""
+            for (i = 1; i <= min_len; i++) {
+                char1 = substr($2, i, 1)
+                char2 = substr($3, i, 1)
+                if (char1 != "-" && char1 == char2) {
+                    prefix = prefix char1
+                } else {
+                    break
+                }
+            }
+            if (prefix == "") {
+                prefix = "-"
+                rest = $3
+            } else {
+                rest = substr($3, length(prefix) + 1)
+            }
+
+            if (rest != "") {
+                if (match(rest, /.*-/)) {
+                    revision = substr(rest, RLENGTH + 1)
+                    rest = substr(rest, 1, RLENGTH - 1)
+                } else {
+                    revision = rest
+                    rest = "-"
+                }
+            }
+
+            if (revision == "") {
+                revision = "-"
+            }
+
+            if (rest == "") {
+                rest = "-"
+            }
+
+            print $0, prefix, rest, revision, len_all
+        }
+    ' > "$UPGRADE_PACKAGE_LIST_FILE"
+
+    rm -f "$PACKAGE_LIST_PACMAN" "$PACKAGE_LIST_AUR"
+    unset PACKAGE_LIST_PACMAN PACKAGE_LIST_AUR
+
+    while read -r PACKAGE VER_OLD VER_NEW SOURDCE DEP PREFIX REST REVISION LEN_ALL; do
+        CHECK_REVISION="${VER_NEW##*-}"
+        CHECK_VERSION="${VER_NEW%-*}"
+        if [ "$REVISION" != "$CHECK_REVISION" ]; then
+            echo "Something wrong with revision: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+            exit 1
+        fi
+        if [ "$PREFIX" = "-" ]; then
+            if [ "$REST" != "$CHECK_VERSION" ]; then
+                echo "Something wrong with rest: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+                exit 1
+            fi
+        elif [ "$REST" = "-" ]; then
+            if [ "$PREFIX" != "$CHECK_VERSION" ]; then
+                echo "Something wrong with prefix: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+                exit 1
+            fi
+        else
+            if [ "$PREFIX$REST" != "$CHECK_VERSION" ]; then
+                echo "Something wrong with prefix+rest: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+                exit 1
+            fi
+        fi
+    done < "$UPGRADE_PACKAGE_LIST_FILE"
+
+    # cat "$UPGRADE_PACKAGE_LIST_FILE"
+    # exit 123
+
+    # time "$SELF_FILE" -list
+    # exit 123
+
+    SELECTED="$("$SELF_FILE" -list | fzf --ansi --disabled --reverse --no-input \
+        --highlight-line \
+        --header "$HEADER" --header-border \
+        --preview "'$SELF_FILE' -preview {}" \
+        --bind "space:execute-silent('$SELF_FILE' -toggle-skip {})+down+reload-sync('$SELF_FILE' -list)" \
+        --bind "ctrl-s:execute-silent('$SELF_FILE' -toggle-group {})+reload-sync('$SELF_FILE' -list)" \
+        --bind "ctrl-a:execute-silent('$SELF_FILE' -upgrade-all)+reload-sync('$SELF_FILE' -list)" \
+        --bind "ctrl-u:execute-silent('$SELF_FILE' -skip-all)+reload-sync('$SELF_FILE' -list)" \
+        --bind "enter:execute-silent('$SELF_FILE' -open-url {})" \
+        --bind "alt-enter:become(echo {})")" || exit 0
+
+    [ -n "$SELECTED" ] || exit 0
+
+    UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
+
+    set --
+    while read -r PACKAGE _ VER_NEW SOURCE _; do
+        if [ "$SOURCE" = "P" ]; then
+            if [ "${UPGRADE_SKIP_LIST#*" $PACKAGE "}" = "$UPGRADE_SKIP_LIST" ]; then
+                set -- "$@" "${PACKAGE}=${VER_NEW}"
+            fi
+        fi
+    done < "$UPGRADE_PACKAGE_LIST_FILE"
+
+    if [ $# -eq 0 ]; then
+        echo
+        echo "There are no pacman packages to update."
+    else
+
+        echo
+        echo "Upgrade pacman package database ..."
+        sudo pacman -Sy
+
+        echo
+        echo "Check pacman upgrade ..."
+
+        if ! OUTPUT="$(pacman -Sp "$@" --color always)"; then
+            echo "$OUTPUT"
+            echo
+            echo "${RED}Update check failed. Check the error output from the pacman command."
+            echo "You may need to mark additional packages as dependencies, or the repository"
+            echo "may already have newer versions available than the selected ones."
+            echo
+            echo "The package list will be updated and you will be returned to selection mode.${RESET}"
+            echo
+            printf "Press Enter to continue..."
+            read -r _
+            continue
+        fi
+
+        echo "Run pacman upgrade ..."
+        pacman -S "$@" --noconfirm --color always
+
+    fi
+
+    set --
+    while read -r PACKAGE _ VER_NEW SOURCE _; do
+        if [ "$SOURCE" = "A" ]; then
+            if [ "${UPGRADE_SKIP_LIST#*" $PACKAGE "}" = "$UPGRADE_SKIP_LIST" ]; then
+                set -- "$@" "${PACKAGE}"
+            fi
+        fi
+    done < "$UPGRADE_PACKAGE_LIST_FILE"
+
+    if [ $# -eq 0 ]; then
+        echo
+        echo "There are no AUR packages to update."
+    else
+        echo
+        echo "Run AUR upgrade ..."
+        yay -S "$@" --color always \
+            --noconfirm --sudoloop --needed \
+            --answerclean None --answerdiff None \
+            --answeredit None --answerupgrade None
+    fi
+
+    echo
+    echo "${GREEN}All done!${RESET}"
+    exit 0
+
+done
