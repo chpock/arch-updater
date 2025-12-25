@@ -131,8 +131,12 @@ then
                                     }
                                 '
                     )"
-                    echo "$OUTPUT" > "$PACKAGE_INFO_CACHE_ARCHLOG"
-                    echo "$OUTPUT"
+                    if [ -n "$OUTPUT" ]; then
+                        echo "$OUTPUT" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+                        echo "$OUTPUT"
+                    else
+                        echo "${RED}An error occurred while fetching the package log.${RESET}"
+                    fi
                 else
                     cat "$PACKAGE_INFO_CACHE_ARCHLOG"
                 fi
