@@ -11,15 +11,20 @@ generateAnsiColors() {
         if [ "$1" = "shell" ]; then
             printf "%s='\033[0;%im' " "$NAME" "$F_CODE"
             printf "H_%s='\033[0;%im' " "$NAME" "$FB_CODE"
-        else
+        elif [ "$1" = "awk" ]; then
             printf -- "-v %s=\033[0;%im " "$NAME" "$F_CODE"
             printf -- "-v H_%s=\033[0;%im " "$NAME" "$FB_CODE"
+        else
+            printf -- "--arg %s \033[0;%im " "$NAME" "$F_CODE"
+            printf -- "--arg H_%s \033[0;%im " "$NAME" "$FB_CODE"
         fi
     done
     if [ "$1" = "shell" ]; then
         printf "RESET='\033[0m' "
-    else
+    elif [ "$1" = "awk" ]; then
         printf -- "-v RESET=\033[0m "
+    else
+        printf -- "--arg RESET \033[0m "
     fi
 }
 
@@ -53,6 +58,7 @@ then
         PACKAGE_INFO_CACHE_INFO="$PACKAGE_INFO_CACHE_DIR/info.$PACKAGE"
         PACKAGE_INFO_CACHE_URL="$PACKAGE_INFO_CACHE_DIR/url.$PACKAGE"
         PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+        PACKAGE_INFO_CACHE_ISSUES="$PACKAGE_INFO_CACHE_DIR/issues.$PACKAGE"
 
         if [ ! -e "$PACKAGE_INFO_CACHE_INFO" ]; then
             {
@@ -78,7 +84,13 @@ then
 
             cat "$PACKAGE_INFO_CACHE_INFO"
 
+            if [ -e "$PACKAGE_INFO_CACHE_ISSUES" ]; then
+                cat "$PACKAGE_INFO_CACHE_ISSUES"
+            fi
+
             if [ "$HAS_ARCHLOG" -eq 1 ]; then
+                echo "${CYAN}ArchLinux package changelog${H_BLACK}:${RESET}"
+                echo
                 if [ ! -e "$PACKAGE_INFO_CACHE_ARCHLOG" ]; then
                     STOP_VERSION="${VER_OLD%-*}"
                     # In dash, string replacement is not supported.
@@ -199,6 +211,16 @@ then
 
             printf "${H_BLACK}-${MAGENTA}%s${RESET}" "$REVISION"
 
+            if [ "$ISSUES_COUNT" -gt 0 ]; then
+                case "$SOURCE" in
+                    P) [ "$ISSUES_COUNT" -eq 1 ] && WORD="issue" || WORD="issues";;
+                    A) [ "$ISSUES_COUNT" -eq 1 ] && WORD="comment" || WORD="comments";;
+                    *) [ "$ISSUES_COUNT" -eq 1 ] && WORD="unknown" || WORD="unknowns";;
+                esac
+                printf " ${H_BLACK}(${H_RED}%i ${RED}%s${H_BLACK})${RESET}" "$ISSUES_COUNT" "$WORD"
+                LEN_ALL=$(( LEN_ALL + 4 + ${#ISSUES_COUNT} + ${#WORD} ))
+            fi
+
             if [ "$DEP" -eq 1 ]; then
                 WIDTH=$(( 6 + 1 + 5 + 1 + 1 + 1 + 2 + 1 + LEN_ALL ))
                 WIDTH=$(( WIDTH + 6 ))
@@ -213,7 +235,7 @@ then
             echo
         }
 
-        while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
+        while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL ISSUES_COUNT; do
             case "$UNIMPORTANT_PACKAGE_LIST" in
                 *" $PACKAGE "*) IS_UNIMPORTANT=1;;
                 *) IS_UNIMPORTANT=0;;
@@ -264,27 +286,55 @@ cleanup() {
     set +e
     {
         for TEMP_FN in \
+            "$ISSUES_CURL_FILE" \
             "$UPGRADE_PACKAGE_LIST_FILE" \
+            "$UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE" \
             "$UPGRADE_SKIP_LIST_FILE" \
             "$PACKAGE_LIST_PACMAN" \
             "$PACKAGE_LIST_AUR"
         do
             [ -z "$TEMP_FN" ] || rm -f "$TEMP_FN"
         done
-        [ -z "$PACKAGE_INFO_CACHE_DIR" ] || rm -rf "$PACKAGE_INFO_CACHE_DIR"
+        for TEMP_DIR in \
+            "$CURL_OUTPUT_ISSUES_PACMAN" \
+            "$PACKAGE_INFO_CACHE_DIR"
+        do
+            [ -z "$TEMP_DIR" ] || rm -rf "$TEMP_DIR"
+        done
     } >/dev/null 2>&1
     exit "$1"
 }
 
 trap 'cleanup $?' EXIT INT TERM HUP
 
-unset UNIMPORTANT_PACKAGE_LIST_FILE UPGRADE_PACKAGE_LIST_FILE UPGRADE_SKIP_LIST_FILE PACKAGE_INFO_CACHE_DIR
+unset \
+    ISSUES_CURL_FILE \
+    UNIMPORTANT_PACKAGE_LIST_FILE \
+    ISSUES_CACHE_DIR \
+    UPGRADE_PACKAGE_LIST_FILE \
+    UPGRADE_SKIP_LIST_FILE \
+    PACKAGE_INFO_CACHE_DIR
+
+command -v curl >/dev/null 2>&1 && HAS_CURL=1 || HAS_CURL=0
+command -v jq >/dev/null 2>&1 && HAS_JQ=1 || HAS_JQ=0
+command -v expac >/dev/null 2>&1 && HAS_EXPAC=1 || HAS_EXPAC=0
+
+if [ "$HAS_CURL" -eq 1 ] && [ "$HAS_JQ" -eq 1 ] && [ "$HAS_EXPAC" -eq 1 ]; then
+    CAN_FETCH_PACMAN_ISSUES=1
+else
+    echo
+    echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} package issue will not be shown because some necessary utilities are not installed, please check that packages ${CYAN}curl${RESET}, ${CYAN}jq${RESET} and ${CYAN}expac${RESET} are installed."
+    CAN_FETCH_PACMAN_ISSUES=0
+fi
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/arch-updater"
 mkdir -p "$CONFIG_DIR"
 UNIMPORTANT_PACKAGE_LIST_FILE="$CONFIG_DIR/unimportant-packages.list"
 export UNIMPORTANT_PACKAGE_LIST_FILE
 [ -e "$UNIMPORTANT_PACKAGE_LIST_FILE" ] || touch "$UNIMPORTANT_PACKAGE_LIST_FILE"
+
+ISSUES_CACHE_DIR="${XDG_CACHE_DIR:-$HOME/.cache}/arch-updater/package-issues"
+mkdir -p "$ISSUES_CACHE_DIR"
 
 UPGRADE_PACKAGE_LIST_FILE="$(mktemp)"
 export UPGRADE_PACKAGE_LIST_FILE
@@ -301,14 +351,27 @@ HEADER="$(printf '%s\n' \
     "ALT-ENTER: Start upgrade       | ESC:    Exit" \
 )"
 
+ISSUE_FILE_STAMP="$(date --utc +%Y%m%d%H)"
+
+JQ_COLORS="$(generateAnsiColors jq)"
+
+getIssueCacheFile() {
+    PACKAGE="$1"
+    echo "$ISSUES_CACHE_FILE"
+}
+
+stage() {
+    echo "${GREEN}* ${RESET}$1 ${H_BLACK}...${RESET}"
+}
+
 while true; do
 
     echo
-    echo "Get pacman updated package list..."
+    stage "Get pacman updated package list..."
     PACKAGE_LIST_PACMAN="$(mktemp)"
     checkupdates --nocolor > "$PACKAGE_LIST_PACMAN"
 
-    echo "Get AUR updated package list..."
+    stage "Get AUR updated package list..."
     PACKAGE_LIST_AUR="$(mktemp)"
     yay -Qua --color never > "$PACKAGE_LIST_AUR"
 
@@ -383,35 +446,168 @@ while true; do
     rm -f "$PACKAGE_LIST_PACMAN" "$PACKAGE_LIST_AUR"
     unset PACKAGE_LIST_PACMAN PACKAGE_LIST_AUR
 
-    while read -r PACKAGE VER_OLD VER_NEW SOURDCE DEP PREFIX REST REVISION LEN_ALL; do
+    unset FETCH_ISSUES_PACMAN
+
+    stage "Verify generated package list..."
+    while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
         CHECK_REVISION="${VER_NEW##*-}"
         CHECK_VERSION="${VER_NEW%-*}"
         if [ "$REVISION" != "$CHECK_REVISION" ]; then
-            echo "Something wrong with revision: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+            echo "Something wrong with revision: $PACKAGE $VER_OLD $VER_NEW $SOURCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
             exit 1
         fi
         if [ "$PREFIX" = "-" ]; then
             if [ "$REST" != "$CHECK_VERSION" ]; then
-                echo "Something wrong with rest: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+                echo "Something wrong with rest: $PACKAGE $VER_OLD $VER_NEW $SOURCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
                 exit 1
             fi
         elif [ "$REST" = "-" ]; then
             if [ "$PREFIX" != "$CHECK_VERSION" ]; then
-                echo "Something wrong with prefix: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+                echo "Something wrong with prefix: $PACKAGE $VER_OLD $VER_NEW $SOURCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
                 exit 1
             fi
         else
             if [ "$PREFIX$REST" != "$CHECK_VERSION" ]; then
-                echo "Something wrong with prefix+rest: $PACKAGE $VER_OLD $VER_NEW $SOURDCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
+                echo "Something wrong with prefix+rest: $PACKAGE $VER_OLD $VER_NEW $SOURCE $DEP $PREFIX $REST $REVISION $LEN_ALL"
                 exit 1
             fi
         fi
+        if [ "$SOURCE" = "P" ] && [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+            ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+            if [ ! -e "$ISSUES_CACHE_FILE" ] && [ ! -e "${ISSUES_CACHE_FILE}.empty" ]; then
+                rm -f "$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-*
+                FETCH_ISSUES_PACMAN="$FETCH_ISSUES_PACMAN$PACKAGE "
+            fi
+        fi
     done < "$UPGRADE_PACKAGE_LIST_FILE"
+
+    if [ -n "$FETCH_ISSUES_PACMAN" ]; then
+
+        CURL_OUTPUT_ISSUES_PACMAN="$(mktemp -d)"
+
+        stage "Generate URLs for package issues list..."
+        PACMAN_LIST_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/pacman.list
+        CURL_CONFIG_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/curl-config.list
+        CURL_RESULT_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/curl-result.list
+        # shellcheck disable=SC2086
+        TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_ISSUES_PACMAN > "$PACMAN_LIST_FILE"
+        cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" | sort -u | jq -Rr --arg outputDir "$CURL_OUTPUT_ISSUES_PACMAN" '
+            split("\n")
+            | .[]
+            | split(" ") as $p
+            | [
+                $p[0],
+                ($p[1] | @uri),
+                ("archlinux/packaging/packages/\($p[0])" | gsub("\\+"; "plus") | @uri)
+              ]
+            | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/issues?state=opened&created_after=\(.[1])"
+              + "\n"
+              + "output=\($outputDir)/pkg.\(.[0]).json"
+              + "\n"
+        ' > "$CURL_CONFIG_FILE"
+
+        stage "Download package issues..."
+        curl --silent \
+            --parallel --parallel-immediate --parallel-max 10 \
+            --write-out "%{response_code} %{filename_effective}\n" \
+            --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
+
+        stage "Process package issues..."
+
+        # Delete 'empty' files (exactly 2 bytes '[]')
+        find "$CURL_OUTPUT_ISSUES_PACMAN" -type f -size 2c -delete
+
+        ERROR_COUNT=0
+        while read -r RESPONSE_CODE OUTPUT_FILE; do
+            [ "$RESPONSE_CODE" != 200 ] || continue
+            PACKAGE="${OUTPUT_FILE##*/}"
+            PACKAGE="${PACKAGE#*.}"
+            PACKAGE="${PACKAGE%.*}"
+            if [ "$RESPONSE_CODE" = "404" ]; then
+                echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
+                mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
+            else
+                echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
+                mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
+                ERROR_COUNT=$(( ERROR_COUNT + 1 ))
+            fi
+        done < "$CURL_RESULT_FILE"
+
+        while read -r PACKAGE_BASE _ PACKAGE; do
+            OUTPUT_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/pkg."$PACKAGE_BASE".json
+            ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+            if [ -e "$OUTPUT_FILE" ]; then
+                cp "$OUTPUT_FILE" "$ISSUES_CACHE_FILE"
+            elif [ ! -e "${OUTPUT_FILE}.error" ]; then
+                # this is 'touch' without calling external tool
+                printf '' > "${ISSUES_CACHE_FILE}.empty"
+            fi
+        done < "$PACMAN_LIST_FILE"
+
+        rm -rf "$CURL_OUTPUT_ISSUES_PACMAN"
+        unset CURL_OUTPUT_ISSUES_PACMAN
+
+        if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo
+            printf "Press Enter to continue..."
+            read -r _
+        fi
+
+    fi
+
+    rm -f "$PACKAGE_INFO_CACHE_DIR/issues".*
+    if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+        stage "Render package issues..."
+    fi
+
+    UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE="$(mktemp)"
+    while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
+        ISSUES_COUNT=0
+        if [ "$SOURCE" = "P" ]; then
+            if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+                ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ -e "$ISSUES_CACHE_FILE" ]; then
+                    PACKAGE_INFO_CACHE_ISSUES="$PACKAGE_INFO_CACHE_DIR/issues.$PACKAGE"
+                    #      | gsub("\n```(?<type>[^\n]*)(?<code>.*)\n```"; "\n" + $H_BLACK + "```" + $BLUE + .type + $GREEN + .code + $H_BLACK + "\n```" + $RESET)
+                    # shellcheck disable=SC2086
+                    jq -r $JQ_COLORS '
+                      .[]
+                      | (
+                          .description
+                          | gsub("<!--[^>]*-->"; "")
+                          | gsub("(^|\\n+)(?<hash>#+\\s+)(?<title>.*)\\n+"; "\n\n" + $H_MAGENTA + .hash + $MAGENTA + .title + $RESET + "\n\n")
+                          | gsub("(^|\\n+)```(?<type>[^\n]*)(?<code>.+)\\n```"; "\n\n" + $H_BLACK + "```" + $BLUE + .type + $GREEN + .code + "\n" + $H_BLACK + "```" + $RESET; "m")
+                          | gsub("`(?<text>[^`\\n]+)`"; $H_BLACK + "`" + $GREEN + .text + $H_BLACK + "`" + $RESET)
+                          | gsub("^\\n+"; "")
+                          | gsub("\\n+$"; "")
+                          | gsub("\\n{2,}"; "\n\n")
+                        ) as $description
+                      | $RED + "Issue" + $H_BLACK + "#" + $H_RED + "\(.iid)" + $H_BLACK + ": " + $RESET + .title + "\n" +
+                        $CYAN + "Created" + $H_BLACK + ": " + $RESET + .created_at + "\n" +
+                        $CYAN + "URL" + $H_BLACK + ": " + $H_BLUE + .web_url + $RESET + "\n" +
+                        $CYAN + "Description" + $H_BLACK + ":" + $RESET + "\n\n" +
+                        $description + "\n"
+                    ' "$ISSUES_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ISSUES"
+                    ISSUES_COUNT="$(jq 'length' "$ISSUES_CACHE_FILE")"
+                fi
+            fi
+        elif [ "$SOURCE" = "A" ]; then
+            : no-op
+        else
+            echo "That's not supposed to happen." >&2
+            exit 1
+        fi
+        echo "$PACKAGE" "$VER_OLD" "$VER_NEW" "$SOURCE" "$DEP" "$PREFIX" "$REST" "$REVISION" "$LEN_ALL" "$ISSUES_COUNT"
+    done < "$UPGRADE_PACKAGE_LIST_FILE" > "$UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE"
+
+    mv -f "$UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE" "$UPGRADE_PACKAGE_LIST_FILE"
+    unset UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE
 
     SELECTED="$("$SELF_FILE" -list | fzf --ansi --disabled --reverse --no-input \
         --highlight-line \
         --header "$HEADER" --header-border \
         --preview "'$SELF_FILE' -preview {}" \
+        --preview-window wrap \
         --bind "space:execute-silent('$SELF_FILE' -toggle-skip {})+down+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-s:execute-silent('$SELF_FILE' -toggle-group {})+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-a:execute-silent('$SELF_FILE' -upgrade-all)+reload-sync('$SELF_FILE' -list)" \
