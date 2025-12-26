@@ -303,7 +303,8 @@ cleanup() {
             "$UPGRADE_PACKAGE_TEMP_LIST_FILE" \
             "$UPGRADE_SKIP_LIST_FILE" \
             "$PACKAGE_LIST_PACMAN" \
-            "$PACKAGE_LIST_AUR"
+            "$PACKAGE_LIST_AUR" \
+            "$TEMP_RATE_LIMIT_INFO"
         do
             [ -z "$TEMP_FN" ] || rm -f "$TEMP_FN"
         done
@@ -323,6 +324,7 @@ unset \
     ISSUES_CURL_FILE \
     UNIMPORTANT_PACKAGE_LIST_FILE \
     ISSUES_CACHE_DIR \
+    CHANGELOG_CACHE_DIR \
     UPGRADE_PACKAGE_LIST_FILE \
     UPGRADE_SKIP_LIST_FILE \
     PACKAGE_INFO_CACHE_DIR
@@ -360,7 +362,8 @@ export UNIMPORTANT_PACKAGE_LIST_FILE
 [ -e "$UNIMPORTANT_PACKAGE_LIST_FILE" ] || touch "$UNIMPORTANT_PACKAGE_LIST_FILE"
 
 ISSUES_CACHE_DIR="${XDG_CACHE_DIR:-$HOME/.cache}/arch-updater/package-issues"
-mkdir -p "$ISSUES_CACHE_DIR"
+CHANGELOG_CACHE_DIR="${XDG_CACHE_DIR:-$HOME/.cache}/arch-updater/package-changelog"
+mkdir -p "$ISSUES_CACHE_DIR" "$CHANGELOG_CACHE_DIR"
 
 UPGRADE_PACKAGE_LIST_FILE="$(mktemp)"
 export UPGRADE_PACKAGE_LIST_FILE
@@ -388,6 +391,21 @@ getIssueCacheFile() {
 
 stage() {
     echo "${GREEN}* ${RESET}$1 ${H_BLACK}...${RESET}"
+}
+
+waitRateLimit() {
+    WAIT_TIME="$1"
+    MESSAGE="$2"
+    START_TIME="$(date +%s)"
+    while true; do
+        CURRENT_TIME="$(date +%s)"
+        LEFT=$(( START_TIME - CURRENT_TIME + WAIT_TIME ))
+        [ "$LEFT" -gt 0 ] || break
+        [ "$LEFT" -eq 1 ] && WORD="second" || WORD="seconds"
+        printf "\rIn ${BLUE}%s${RESET} %s, %s\033[K" "$LEFT" "$WORD" "$MESSAGE"
+        sleep 1
+    done
+    printf '\r\033[K'
 }
 
 while true; do
@@ -506,15 +524,15 @@ while true; do
                 fi
             fi
             if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                TAGS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ ! -e "$COMMITS_CACHE_FILE" ] || [ ! -e "$TAGS_CACHE_FILE" ]; then
                     FETCH_CHANGELOG_PACMAN="$FETCH_CHANGELOG_PACMAN$PACKAGE "
                 fi
             fi
         elif [ "$SOURCE" = "A" ]; then
             if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ ! -e "$COMMITS_CACHE_FILE" ]; then
                     FETCH_CHANGELOG_AUR="$FETCH_CHANGELOG_AUR$PACKAGE "
                 fi
@@ -594,22 +612,45 @@ while true; do
             [ -n "$RETRY_CHANGELOG_PACMAN" ] || break
 
             echo
-            echo "Got rate limit for $(echo "$RETRY_CHANGELOG_PACMAN" | wc -w) URLs."
-            printf "In 365 seconds, there will be another attempt to download there URLs..."
-            sleep 365
+            echo "${YELLOW}Got rate limit for $(echo "$RETRY_CHANGELOG_PACMAN" | wc -w) URLs. Rate limit info:${RESET}"
+
+            RETRY_AFTER=365
+
+            TEMP_RATE_LIMIT_INFO="$(mktemp)"
+            curl -sI "https://gitlab.archlinux.org/api/v4/projects/archlinux%2Fpackaging%2Fpackages%2Flinux/repository/commits" > "$TEMP_RATE_LIMIT_INFO"
+
+            while read -r LINE; do
+                case "$LINE" in
+                    retry-after:*)
+                        RETRY_AFTER="$(echo "${LINE#*: }" | tr -d '\r')"
+                        ;;
+                    ratelimit-*|x-ratelimit-*)
+                        : no-op
+                        ;;
+                    *)
+                        continue
+                        ;;
+                esac
+                echo "    ${CYAN}${LINE%%: *}${H_BLACK}: ${RESET}${LINE#*: }"
+            done < "$TEMP_RATE_LIMIT_INFO"
+
+            rm -f "$TEMP_RATE_LIMIT_INFO"
+            unset TEMP_RATE_LIMIT_INFO
+
             echo
+            waitRateLimit "$RETRY_AFTER" "there will be another attempt to download these URLs..."
 
         done
 
         while read -r PACKAGE_BASE _ PACKAGE; do
             OUTPUT_COMMITS_FILE="$CURL_OUTPUT_DIR"/commits."$PACKAGE_BASE".json
             OUTPUT_TAGS_FILE="$CURL_OUTPUT_DIR"/tags."$PACKAGE_BASE".json
-            rm -f "$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-*
-            rm -f "$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-*
+            rm -f "$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-*
+            rm -f "$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-*
             if [ -e "$OUTPUT_COMMITS_FILE" ] && [ -e "$OUTPUT_TAGS_FILE" ]; then
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
-                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                TAGS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 cp "$OUTPUT_TAGS_FILE" "$TAGS_CACHE_FILE"
             fi
         done < "$PACKAGES_LIST_FILE"
@@ -678,18 +719,41 @@ while true; do
             [ -n "$RETRY_CHANGELOG_AUR" ] || break
 
             echo
-            echo "Got rate limit for $(echo "$RETRY_CHANGELOG_AUR" | wc -w) packages."
-            printf "In 365 seconds, there will be another attempt to download changelogs for there packages..."
-            sleep 365
+            echo "${YELLOW}Got rate limit for $(echo "$RETRY_CHANGELOG_AUR" | wc -w) packages. Rate limit info:${RESET}"
+
+            RETRY_AFTER=365
+
+            TEMP_RATE_LIMIT_INFO="$(mktemp)"
+            curl -sI "https://api.github.com/repos/archlinux/aur/commits?sha=linux" > "$TEMP_RATE_LIMIT_INFO"
+
+            while read -r LINE; do
+                case "$LINE" in
+                    retry-after:*)
+                        RETRY_AFTER="$(echo "${LINE#*: }" | tr -d '\r')"
+                        ;;
+                    ratelimit-*|x-ratelimit-*)
+                        : no-op
+                        ;;
+                    *)
+                        continue
+                        ;;
+                esac
+                echo "    ${CYAN}${LINE%%: *}${H_BLACK}: ${RESET}${LINE#*: }"
+            done < "$TEMP_RATE_LIMIT_INFO"
+
+            rm -f "$TEMP_RATE_LIMIT_INFO"
+            unset TEMP_RATE_LIMIT_INFO
+
             echo
+            waitRateLimit "$RETRY_AFTER" "there will be another attempt to download changelogs for there packages..."
 
         done
 
         for PACKAGE in $FETCH_CHANGELOG_AUR; do
             OUTPUT_COMMITS_FILE="$CURL_OUTPUT_DIR"/commits."$PACKAGE".json
-            rm -f "$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-*
+            rm -f "$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-*
             if [ -e "$OUTPUT_COMMITS_FILE" ]; then
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
             fi
         done
@@ -767,10 +831,33 @@ while true; do
             [ -n "$RETRY_ISSUES_PACMAN" ] || break
 
             echo
-            echo "Got rate limit for $(echo "$RETRY_ISSUES_PACMAN" | wc -w) packages."
-            printf "In 365 seconds, there will be another attempt to download issues for these packages..."
-            sleep 365
+            echo "${YELLOW}Got rate limit for $(echo "$RETRY_ISSUES_PACMAN" | wc -w) packages. Retry limit info:${RESET}"
+
+            RETRY_AFTER=365
+
+            TEMP_RATE_LIMIT_INFO="$(mktemp)"
+            curl -sI "https://gitlab.archlinux.org/api/v4/projects/archlinux%2Fpackaging%2Fpackages%2Flinux/issues" > "$TEMP_RATE_LIMIT_INFO"
+
+            while read -r LINE; do
+                case "$LINE" in
+                    retry-after:*)
+                        RETRY_AFTER="$(echo "${LINE#*: }" | tr -d '\r')"
+                        ;;
+                    ratelimit-*|x-ratelimit-*)
+                        : no-op
+                        ;;
+                    *)
+                        continue
+                        ;;
+                esac
+                echo "    ${CYAN}${LINE%%: *}${H_BLACK}: ${RESET}${LINE#*: }"
+            done < "$TEMP_RATE_LIMIT_INFO"
+
+            rm -f "$TEMP_RATE_LIMIT_INFO"
+            unset TEMP_RATE_LIMIT_INFO
+
             echo
+            waitRateLimit "$RETRY_AFTER" "there will be another attempt to download issues for there packages..."
 
         done
 
@@ -852,8 +939,8 @@ while true; do
 
             if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
 
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                TAGS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
 
                 if [ -e "$COMMITS_CACHE_FILE" ] && [ -e "$TAGS_CACHE_FILE" ]; then
 
@@ -894,7 +981,7 @@ while true; do
 
             if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
 
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
 
                 if [ -e "$COMMITS_CACHE_FILE" ]; then
 
