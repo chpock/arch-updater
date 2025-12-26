@@ -516,49 +516,71 @@ while true; do
         CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
         # shellcheck disable=SC2086
         TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_CHANGELOG_PACMAN > "$PACMAN_LIST_FILE"
-        cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" | sort -u | jq -Rr --arg outputDir "$CURL_OUTPUT_DIR" '
-            split("\n")
-            | .[]
-            | split(" ") as $p
-            | [
-                $p[0],
-                ($p[1] | @uri),
-                ("archlinux/packaging/packages/\($p[0])" | gsub("\\+"; "plus") | @uri)
-              ]
-            | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/repository/commits?since=\(.[1])"
-              + "\n"
-              + "output=\($outputDir)/commits.\(.[0]).json"
-              + "\n"
-              + "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/repository/tags"
-              + "\n"
-              + "output=\($outputDir)/tags.\(.[0]).json"
-              + "\n"
-        ' > "$CURL_CONFIG_FILE"
+        RETRY_CHANGELOG_PACMAN="$FETCH_CHANGELOG_PACMAN"
 
-        stage "Download changelogs"
-        curl --silent \
-            --parallel --parallel-immediate --parallel-max 10 \
-            --retry 5 --retry-delay 35 --retry-all-errors \
-            --write-out "%{response_code} %{filename_effective}\n" \
-            --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
+        while true; do
 
-        stage "Process changelogs"
+            cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" \
+                | sort -u \
+                | jq -Rr --arg pkg_list_data "$RETRY_CHANGELOG_PACMAN" --arg outputDir "$CURL_OUTPUT_DIR" '
+                    ($pkg_list_data | split(" ")) as $pkg_list
+                    | split("\n")
+                    | .[]
+                    | split(" ") as $p
+                    | select($p[0] | IN($pkg_list[]))
+                    | [
+                        $p[0],
+                        ($p[1] | @uri),
+                        ("archlinux/packaging/packages/\($p[0])" | gsub("\\+"; "plus") | @uri)
+                    ]
+                    | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/repository/commits?since=\(.[1])"
+                    + "\n"
+                    + "output=\($outputDir)/commits.\(.[0]).json"
+                    + "\n"
+                    + "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/repository/tags"
+                    + "\n"
+                    + "output=\($outputDir)/tags.\(.[0]).json"
+                    + "\n"
+                ' > "$CURL_CONFIG_FILE"
 
-        while read -r RESPONSE_CODE OUTPUT_FILE; do
-            [ "$RESPONSE_CODE" != 200 ] || continue
-            PACKAGE="${OUTPUT_FILE##*/}"
-            KIND="${PACKAGE%%.*}"
-            PACKAGE="${PACKAGE#*.}"
-            PACKAGE="${PACKAGE%.*}"
-            if [ "$RESPONSE_CODE" = "404" ]; then
-                echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
-                rm -f "$OUTPUT_FILE"
-            else
-                echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
-                rm -f "$OUTPUT_FILE"
-                CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
-            fi
-        done < "$CURL_RESULT_FILE"
+            stage "Download changelogs"
+            curl --silent \
+                --parallel --parallel-immediate --parallel-max 10 \
+                --write-out "%{response_code} %{filename_effective}\n" \
+                --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
+
+            stage "Process changelogs"
+
+            unset RETRY_CHANGELOG_PACMAN
+
+            while read -r RESPONSE_CODE OUTPUT_FILE; do
+                [ "$RESPONSE_CODE" != 200 ] || continue
+                PACKAGE="${OUTPUT_FILE##*/}"
+                KIND="${PACKAGE%%.*}"
+                PACKAGE="${PACKAGE#*.}"
+                PACKAGE="${PACKAGE%.*}"
+                if [ "$RESPONSE_CODE" = 429 ]; then
+                    RETRY_CHANGELOG_PACMAN="$RETRY_CHANGELOG_PACMAN$PACKAGE "
+                    rm -f "$OUTPUT_FILE"
+                elif [ "$RESPONSE_CODE" = 404 ]; then
+                    echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
+                    rm -f "$OUTPUT_FILE"
+                else
+                    echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
+                    rm -f "$OUTPUT_FILE"
+                    CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
+                fi
+            done < "$CURL_RESULT_FILE"
+
+            [ -n "$RETRY_CHANGELOG_PACMAN" ] || break
+
+            echo
+            echo "Got rate limit for $(echo "$RETRY_CHANGELOG_PACMAN" | wc -w) URLs."
+            printf "In 365 seconds, there will be another attempt to download there URLs..."
+            sleep 365
+            echo
+
+        done
 
         while read -r PACKAGE_BASE _ PACKAGE; do
             OUTPUT_COMMITS_FILE="$CURL_OUTPUT_DIR"/commits."$PACKAGE_BASE".json
@@ -587,47 +609,69 @@ while true; do
         CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
         # shellcheck disable=SC2086
         TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_ISSUES_PACMAN > "$PACMAN_LIST_FILE"
-        cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" | sort -u | jq -Rr --arg outputDir "$CURL_OUTPUT_DIR" '
-            split("\n")
-            | .[]
-            | split(" ") as $p
-            | [
-                $p[0],
-                ($p[1] | @uri),
-                ("archlinux/packaging/packages/\($p[0])" | gsub("\\+"; "plus") | @uri)
-              ]
-            | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/issues?state=opened&created_after=\(.[1])"
-              + "\n"
-              + "output=\($outputDir)/issues.\(.[0]).json"
-              + "\n"
-        ' > "$CURL_CONFIG_FILE"
+        RETRY_ISSUES_PACMAN="$FETCH_ISSUES_PACMAN"
 
-        stage "Download issues"
-        curl --silent \
-            --parallel --parallel-immediate --parallel-max 10 \
-            --retry 5 --retry-delay 35 --retry-all-errors \
-            --write-out "%{response_code} %{filename_effective}\n" \
-            --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
+        while true; do
 
-        stage "Process issues"
+            cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" \
+                | sort -u \
+                | jq -Rr --arg pkg_list_data "$RETRY_ISSUES_PACMAN" --arg outputDir "$CURL_OUTPUT_DIR" '
+                    ($pkg_list_data | split(" ")) as $pkg_list
+                    | split("\n")
+                    | .[]
+                    | split(" ") as $p
+                    | select($p[0] | IN($pkg_list[]))
+                    | [
+                        $p[0],
+                        ($p[1] | @uri),
+                        ("archlinux/packaging/packages/\($p[0])" | gsub("\\+"; "plus") | @uri)
+                    ]
+                    | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/issues?state=opened&created_after=\(.[1])"
+                    + "\n"
+                    + "output=\($outputDir)/issues.\(.[0]).json"
+                    + "\n"
+                ' > "$CURL_CONFIG_FILE"
 
-        # Delete 'empty' files (exactly 2 bytes '[]')
-        find "$CURL_OUTPUT_DIR" -type f -size 2c -delete
+            stage "Download issues"
+            curl --silent \
+                --parallel --parallel-immediate --parallel-max 10 \
+                --write-out "%{response_code} %{filename_effective}\n" \
+                --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
 
-        while read -r RESPONSE_CODE OUTPUT_FILE; do
-            [ "$RESPONSE_CODE" != 200 ] || continue
-            PACKAGE="${OUTPUT_FILE##*/}"
-            PACKAGE="${PACKAGE#*.}"
-            PACKAGE="${PACKAGE%.*}"
-            if [ "$RESPONSE_CODE" = "404" ]; then
-                echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
-                mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
-            else
-                echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
-                mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
-                CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
-            fi
-        done < "$CURL_RESULT_FILE"
+            stage "Process issues"
+
+            # Delete 'empty' files (exactly 2 bytes '[]')
+            find "$CURL_OUTPUT_DIR" -type f -size 2c -delete
+
+            unset RETRY_ISSUES_PACMAN
+
+            while read -r RESPONSE_CODE OUTPUT_FILE; do
+                [ "$RESPONSE_CODE" != 200 ] || continue
+                PACKAGE="${OUTPUT_FILE##*/}"
+                PACKAGE="${PACKAGE#*.}"
+                PACKAGE="${PACKAGE%.*}"
+                if [ "$RESPONSE_CODE" = 429 ]; then
+                    RETRY_ISSUES_PACMAN="$RETRY_ISSUES_PACMAN$PACKAGE "
+                    rm -f "$OUTPUT_FILE"
+                elif [ "$RESPONSE_CODE" = 404 ]; then
+                    echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
+                    mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
+                else
+                    echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
+                    mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
+                    CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
+                fi
+            done < "$CURL_RESULT_FILE"
+
+            [ -n "$RETRY_ISSUES_PACMAN" ] || break
+
+            echo
+            echo "Got rate limit for $(echo "$RETRY_ISSUES_PACMAN" | wc -w) packages."
+            printf "In 365 seconds, there will be another attempt to download issues for these packages..."
+            sleep 365
+            echo
+
+        done
 
         while read -r PACKAGE_BASE _ PACKAGE; do
             OUTPUT_FILE="$CURL_OUTPUT_DIR"/issues."$PACKAGE_BASE".json
