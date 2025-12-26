@@ -2,6 +2,9 @@
 
 set -e
 
+# 2 days = 172800 seconds
+AGE_THRESHOLD=172800
+
 generateAnsiColors() {
     for i in 0:BLACK 1:RED 2:GREEN 3:YELLOW 4:BLUE 5:MAGENTA 6:CYAN 7:WHITE; do
         NAME="${i#*:}"
@@ -169,8 +172,6 @@ then
 
     elif [ "$1" = "-list" ]; then
 
-        env | sort > myenv
-
         if [ -n "$FZF_COLUMNS" ]; then
             if [ -n "$FZF_PREVIEW_LEFT" ]; then
                 COLUMNS=$(( FZF_PREVIEW_LEFT - 1 - 1 - 2 ))
@@ -227,6 +228,11 @@ then
                 LEN_ALL=$(( LEN_ALL + 4 + ${#ISSUES_COUNT} + ${#WORD} ))
             fi
 
+            if [ "$AGE" != "-" ]; then
+                printf " ${H_BLACK}(${RED}age${H_BLACK}: ${H_RED}%s${H_BLACK})${RESET}" "$AGE"
+                LEN_ALL=$(( LEN_ALL + 8 + ${#AGE} ))
+            fi
+
             if [ "$DEP" -eq 1 ]; then
                 WIDTH=$(( 6 + 1 + 5 + 1 + 1 + 1 + 2 + 1 + LEN_ALL ))
                 WIDTH=$(( WIDTH + 6 ))
@@ -241,7 +247,7 @@ then
             echo
         }
 
-        while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL ISSUES_COUNT; do
+        while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL AGE ISSUES_COUNT; do
             case "$UNIMPORTANT_PACKAGE_LIST" in
                 *" $PACKAGE "*) IS_UNIMPORTANT=1;;
                 *) IS_UNIMPORTANT=0;;
@@ -294,7 +300,7 @@ cleanup() {
         for TEMP_FN in \
             "$ISSUES_CURL_FILE" \
             "$UPGRADE_PACKAGE_LIST_FILE" \
-            "$UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE" \
+            "$UPGRADE_PACKAGE_TEMP_LIST_FILE" \
             "$UPGRADE_SKIP_LIST_FILE" \
             "$PACKAGE_LIST_PACMAN" \
             "$PACKAGE_LIST_AUR"
@@ -793,60 +799,31 @@ while true; do
 
     # We don't cleanup "$PACKAGE_INFO_CACHE_DIR/archlog".* here as
     # this directory may contain also logs from AUR fetched by arch-log.
-    if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
-        stage "Render changelogs"
-    fi
-
-    while read -r PACKAGE VER_OLD VER_NEW SOURCE _; do
-        if [ "$SOURCE" = "P" ]; then
-            if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                if [ -e "$COMMITS_CACHE_FILE" ] && [ -e "$TAGS_CACHE_FILE" ]; then
-                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
-                    # shellcheck disable=SC2086
-                    jq -r $JQ_COLORS --slurpfile tags_data "$TAGS_CACHE_FILE" '
-                      (INDEX($tags_data[][]; .commit.id)) as $tags
-                      | map(. + {
-                          "tag": ($tags[.id].name | if (. == null or . == "") then "" else "(\(.))" end)
-                        }) as $commits
-                      | ([$commits[] | .tag | length] | max) as $max_w
-                      | $commits[]
-                      | "\($GREEN)* \($YELLOW + (.created_at | split("T"))[0]) \( " " * ($max_w - (.tag | length)))\($GREEN + .tag) \($RESET + .title)"
-                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
-                fi
-            fi
-        elif [ "$SOURCE" = "A" ]; then
-            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
-                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                if [ -e "$COMMITS_CACHE_FILE" ]; then
-                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
-                    # shellcheck disable=SC2086
-                    jq -r $JQ_COLORS '
-                      .[]
-                      | "\($GREEN)* \($YELLOW + (.commit.committer.date | split("T"))[0]) \($RESET + .commit.message)"
-                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
-                fi
-            fi
-        else
-            echo "That's not supposed to happen." >&2
-            exit 1
-        fi
-    done < "$UPGRADE_PACKAGE_LIST_FILE"
-
     rm -f "$PACKAGE_INFO_CACHE_DIR/issues".*
-    if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+    if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ] && [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+        stage "Render changelogs and issues"
+    elif [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
+        stage "Render changelogs"
+    elif [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
         stage "Render issues"
     fi
 
-    UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE="$(mktemp)"
+    UPGRADE_PACKAGE_TEMP_LIST_FILE="$(mktemp)"
     while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
+
+        AGE="-"
         ISSUES_COUNT=0
+
         if [ "$SOURCE" = "P" ]; then
+
             if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+
                 ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+
                 if [ -e "$ISSUES_CACHE_FILE" ]; then
+
                     PACKAGE_INFO_CACHE_ISSUES="$PACKAGE_INFO_CACHE_DIR/issues.$PACKAGE"
+
                     # shellcheck disable=SC2086
                     jq -r $JQ_COLORS '
                       .[]
@@ -866,20 +843,100 @@ while true; do
                         $CYAN + "Description" + $H_BLACK + ":" + $RESET + "\n\n" +
                         $description + "\n"
                     ' "$ISSUES_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ISSUES"
+
                     ISSUES_COUNT="$(jq 'length' "$ISSUES_CACHE_FILE")"
+
                 fi
+
             fi
+
+            if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
+
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+
+                if [ -e "$COMMITS_CACHE_FILE" ] && [ -e "$TAGS_CACHE_FILE" ]; then
+
+                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+
+                    # shellcheck disable=SC2086
+                    jq -r $JQ_COLORS --slurpfile tags_data "$TAGS_CACHE_FILE" '
+                      (INDEX($tags_data[][]; .commit.id)) as $tags
+                      | map(. + {
+                          "tag": ($tags[.id].name | if (. == null or . == "") then "" else "(\(.))" end)
+                        }) as $commits
+                      | ([$commits[] | .tag | length] | max) as $max_w
+                      | $commits[]
+                      | "\($GREEN)* \($YELLOW + (.created_at | split("T"))[0]) \( " " * ($max_w - (.tag | length)))\($GREEN + .tag) \($RESET + .title)"
+                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+
+                    AGE="$(jq -r --argjson threshold "$AGE_THRESHOLD" '
+                      (.[0].created_at | split(".")[0] + "Z") as $commit_date
+                      | ([ (now - ($commit_date | fromdateiso8601)), 3600 ] | max) as $diff
+                      | if ($diff > $threshold) then
+                          "-"
+                        else
+                          ($diff / 86400 | floor) as $days
+                          | (($diff % 86400) / 3600 | floor) as $hours
+                          | [
+                              (if $days > 0 then "\($days)d" else empty end),
+                              (if $hours > 0 then "\($hours)h" else empty end)
+                            ]
+                          | join("")
+                        end
+                    ' "$COMMITS_CACHE_FILE")"
+
+                fi
+
+            fi
+
         elif [ "$SOURCE" = "A" ]; then
-            : no-op
+
+            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
+
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+
+                if [ -e "$COMMITS_CACHE_FILE" ]; then
+
+                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+
+                    # shellcheck disable=SC2086
+                    jq -r $JQ_COLORS '
+                      .[]
+                      | "\($GREEN)* \($YELLOW + (.commit.committer.date | split("T"))[0]) \($RESET + .commit.message)"
+                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+
+                    AGE="$(jq -r --argjson threshold "$AGE_THRESHOLD" '
+                      .[0].commit.committer.date as $commit_date
+                      | ([ (now - ($commit_date | fromdateiso8601)), 3600 ] | max) as $diff
+                      | if ($diff > $threshold) then
+                          "-"
+                        else
+                          ($diff / 86400 | floor) as $days
+                          | (($diff % 86400) / 3600 | floor) as $hours
+                          | [
+                              (if $days > 0 then "\($days)d" else empty end),
+                              (if $hours > 0 then "\($hours)h" else empty end)
+                            ]
+                          | join("")
+                        end
+                    ' "$COMMITS_CACHE_FILE")"
+
+                fi
+
+            fi
+
         else
             echo "That's not supposed to happen." >&2
             exit 1
         fi
-        echo "$PACKAGE" "$VER_OLD" "$VER_NEW" "$SOURCE" "$DEP" "$PREFIX" "$REST" "$REVISION" "$LEN_ALL" "$ISSUES_COUNT"
-    done < "$UPGRADE_PACKAGE_LIST_FILE" > "$UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE"
 
-    mv -f "$UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE" "$UPGRADE_PACKAGE_LIST_FILE"
-    unset UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE
+        echo "$PACKAGE" "$VER_OLD" "$VER_NEW" "$SOURCE" "$DEP" "$PREFIX" "$REST" "$REVISION" "$LEN_ALL" "$AGE" "$ISSUES_COUNT"
+
+    done < "$UPGRADE_PACKAGE_LIST_FILE" > "$UPGRADE_PACKAGE_TEMP_LIST_FILE"
+
+    mv -f "$UPGRADE_PACKAGE_TEMP_LIST_FILE" "$UPGRADE_PACKAGE_LIST_FILE"
+    unset UPGRADE_PACKAGE_TEMP_LIST_FILE
 
     SELECTED="$("$SELF_FILE" -list | fzf --ansi --disabled --reverse --no-input \
         --highlight-line \
