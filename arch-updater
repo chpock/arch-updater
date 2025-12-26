@@ -1039,8 +1039,8 @@ while true; do
         --bind "ctrl-a:execute-silent('$SELF_FILE' -upgrade-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-u:execute-silent('$SELF_FILE' -skip-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "enter:execute-silent('$SELF_FILE' -open-url {})" \
-        --bind '?:toggle-preview+reload-sync('$SELF_FILE' -list)' \
-        --bind 'resize:reload-sync('$SELF_FILE' -list)' \
+        --bind "?:toggle-preview+reload-sync('$SELF_FILE' -list)" \
+        --bind "resize:reload-sync('$SELF_FILE' -list)" \
         --bind "alt-enter:become(echo {})")" || exit 0
 
     [ -n "$SELECTED" ] || exit 0
