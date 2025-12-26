@@ -34,6 +34,8 @@ AWK_COLORS="$(generateAnsiColors awk)"
 NL='
 '
 
+command -v arch-log >/dev/null 2>&1 && HAS_ARCHLOG=1 || HAS_ARCHLOG=0
+
 if [ -n "$UPGRADE_PACKAGE_LIST_FILE" ] \
     && [ -n "$UPGRADE_SKIP_LIST_FILE" ] \
     && [ -n "$UNIMPORTANT_PACKAGE_LIST_FILE" ] \
@@ -42,12 +44,6 @@ then
 
     UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
     UNIMPORTANT_PACKAGE_LIST=" $(cat "$UNIMPORTANT_PACKAGE_LIST_FILE") "
-
-    if command -v arch-log >/dev/null 2>&1; then
-        HAS_ARCHLOG=1
-    else
-        HAS_ARCHLOG=0
-    fi
 
     getPackageInfo() {
 
@@ -300,7 +296,7 @@ cleanup() {
             [ -z "$TEMP_FN" ] || rm -f "$TEMP_FN"
         done
         for TEMP_DIR in \
-            "$CURL_OUTPUT_ISSUES_PACMAN" \
+            "$CURL_OUTPUT_DIR" \
             "$PACKAGE_INFO_CACHE_DIR"
         do
             [ -z "$TEMP_DIR" ] || rm -rf "$TEMP_DIR"
@@ -328,6 +324,17 @@ if [ "$HAS_CURL" -eq 1 ] && [ "$HAS_JQ" -eq 1 ] && [ "$HAS_EXPAC" -eq 1 ]; then
 else
     echo
     echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} package issue will not be shown because some necessary utilities are not installed, please check that packages ${CYAN}curl${RESET}, ${CYAN}jq${RESET} and ${CYAN}expac${RESET} are installed."
+    CAN_FETCH_PACMAN_ISSUES=0
+fi
+
+if [ "$HAS_CURL" -eq 1 ] && [ "$HAS_JQ" -eq 1 ]; then
+    CAN_FETCH_PACMAN_CHANGELOG=1
+elif [ "$HAS_ARCHLOG" -eq 1 ]; then
+    echo "${H_BLACK}[${CYAN}INFO${H_BLACK}]${RESET} package changelog will be fetched using the ${CYAN}arch-log${RESET} utility, please check that packages ${CYAN}curl${RESET} and ${CYAN}jq${RESET} for better performance."
+    CAN_FETCH_PACMAN_ISSUES=0
+else
+    echo
+    echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} package changelog will not be shown because some necessary utilities are not installed, please check that packages ${CYAN}curl${RESET}, ${CYAN}jq${RESET} or ${CYAN}arch-log${RESET} are installed."
     CAN_FETCH_PACMAN_ISSUES=0
 fi
 
@@ -371,11 +378,11 @@ stage() {
 while true; do
 
     echo
-    stage "Get pacman updated package list..."
+    stage "Get pacman updated package list"
     PACKAGE_LIST_PACMAN="$(mktemp)"
     checkupdates --nocolor > "$PACKAGE_LIST_PACMAN"
 
-    stage "Get AUR updated package list..."
+    stage "Get AUR updated package list"
     PACKAGE_LIST_AUR="$(mktemp)"
     yay -Qua --color never > "$PACKAGE_LIST_AUR"
 
@@ -450,9 +457,9 @@ while true; do
     rm -f "$PACKAGE_LIST_PACMAN" "$PACKAGE_LIST_AUR"
     unset PACKAGE_LIST_PACMAN PACKAGE_LIST_AUR
 
-    unset FETCH_ISSUES_PACMAN
+    unset FETCH_ISSUES_PACMAN FETCH_CHANGELOG_PACMAN
 
-    stage "Verify generated package list..."
+    stage "Verify generated package list"
     while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
         CHECK_REVISION="${VER_NEW##*-}"
         CHECK_VERSION="${VER_NEW%-*}"
@@ -476,26 +483,111 @@ while true; do
                 exit 1
             fi
         fi
-        if [ "$SOURCE" = "P" ] && [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
-            ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-            if [ ! -e "$ISSUES_CACHE_FILE" ] && [ ! -e "${ISSUES_CACHE_FILE}.empty" ]; then
-                rm -f "$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-*
-                FETCH_ISSUES_PACMAN="$FETCH_ISSUES_PACMAN$PACKAGE "
+        if [ "$SOURCE" = "P" ]; then
+            if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
+                ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ ! -e "$ISSUES_CACHE_FILE" ] && [ ! -e "${ISSUES_CACHE_FILE}.empty" ]; then
+                    rm -f "$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-*
+                    FETCH_ISSUES_PACMAN="$FETCH_ISSUES_PACMAN$PACKAGE "
+                fi
+            fi
+            if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ ! -e "$COMMITS_CACHE_FILE" ] || [ ! -e "$TAGS_CACHE_FILE" ]; then
+                    rm -f "$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-*
+                    rm -f "$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-*
+                    FETCH_CHANGELOG_PACMAN="$FETCH_CHANGELOG_PACMAN$PACKAGE "
+                fi
             fi
         fi
     done < "$UPGRADE_PACKAGE_LIST_FILE"
 
+    CURL_ERROR_COUNT=0
+
+    if [ -n "$FETCH_CHANGELOG_PACMAN" ]; then
+
+        CURL_OUTPUT_DIR="$(mktemp -d)"
+        COUNT="$(echo "$FETCH_CHANGELOG_PACMAN" | wc -w)"
+
+        stage "Generate URLs for changelogs from $COUNT package(s)"
+        PACMAN_LIST_FILE="$CURL_OUTPUT_DIR"/pacman.list
+        CURL_CONFIG_FILE="$CURL_OUTPUT_DIR"/curl-config.list
+        CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
+        # shellcheck disable=SC2086
+        TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_CHANGELOG_PACMAN > "$PACMAN_LIST_FILE"
+        cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" | sort -u | jq -Rr --arg outputDir "$CURL_OUTPUT_DIR" '
+            split("\n")
+            | .[]
+            | split(" ") as $p
+            | [
+                $p[0],
+                ($p[1] | @uri),
+                ("archlinux/packaging/packages/\($p[0])" | gsub("\\+"; "plus") | @uri)
+              ]
+            | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/repository/commits?since=\(.[1])"
+              + "\n"
+              + "output=\($outputDir)/commits.\(.[0]).json"
+              + "\n"
+              + "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/repository/tags"
+              + "\n"
+              + "output=\($outputDir)/tags.\(.[0]).json"
+              + "\n"
+        ' > "$CURL_CONFIG_FILE"
+
+        stage "Download changelogs"
+        curl --silent \
+            --parallel --parallel-immediate --parallel-max 10 \
+            --retry 5 --retry-delay 35 --retry-all-errors \
+            --write-out "%{response_code} %{filename_effective}\n" \
+            --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
+
+        stage "Process changelogs"
+
+        while read -r RESPONSE_CODE OUTPUT_FILE; do
+            [ "$RESPONSE_CODE" != 200 ] || continue
+            PACKAGE="${OUTPUT_FILE##*/}"
+            KIND="${PACKAGE%%.*}"
+            PACKAGE="${PACKAGE#*.}"
+            PACKAGE="${PACKAGE%.*}"
+            if [ "$RESPONSE_CODE" = "404" ]; then
+                echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
+                rm -f "$OUTPUT_FILE"
+            else
+                echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
+                rm -f "$OUTPUT_FILE"
+                CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
+            fi
+        done < "$CURL_RESULT_FILE"
+
+        while read -r PACKAGE_BASE _ PACKAGE; do
+            OUTPUT_COMMITS_FILE="$CURL_OUTPUT_DIR"/commits."$PACKAGE_BASE".json
+            OUTPUT_TAGS_FILE="$CURL_OUTPUT_DIR"/tags."$PACKAGE_BASE".json
+            if [ -e "$OUTPUT_COMMITS_FILE" ] && [ -e "$OUTPUT_TAGS_FILE" ]; then
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
+                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                cp "$OUTPUT_TAGS_FILE" "$TAGS_CACHE_FILE"
+            fi
+        done < "$PACMAN_LIST_FILE"
+
+        rm -rf "$CURL_OUTPUT_DIR"
+        unset CURL_OUTPUT_DIR
+
+    fi
+
     if [ -n "$FETCH_ISSUES_PACMAN" ]; then
 
-        CURL_OUTPUT_ISSUES_PACMAN="$(mktemp -d)"
+        CURL_OUTPUT_DIR="$(mktemp -d)"
+        COUNT="$(echo "$FETCH_CHANGELOG_PACMAN" | wc -w)"
 
-        stage "Generate URLs for package issues list..."
-        PACMAN_LIST_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/pacman.list
-        CURL_CONFIG_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/curl-config.list
-        CURL_RESULT_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/curl-result.list
+        stage "Generate URLs for issues from $COUNT package(s)"
+        PACMAN_LIST_FILE="$CURL_OUTPUT_DIR"/pacman.list
+        CURL_CONFIG_FILE="$CURL_OUTPUT_DIR"/curl-config.list
+        CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
         # shellcheck disable=SC2086
         TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_ISSUES_PACMAN > "$PACMAN_LIST_FILE"
-        cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" | sort -u | jq -Rr --arg outputDir "$CURL_OUTPUT_ISSUES_PACMAN" '
+        cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" | sort -u | jq -Rr --arg outputDir "$CURL_OUTPUT_DIR" '
             split("\n")
             | .[]
             | split(" ") as $p
@@ -506,22 +598,22 @@ while true; do
               ]
             | "url=https://gitlab.archlinux.org/api/v4/projects/\(.[2])/issues?state=opened&created_after=\(.[1])"
               + "\n"
-              + "output=\($outputDir)/pkg.\(.[0]).json"
+              + "output=\($outputDir)/issues.\(.[0]).json"
               + "\n"
         ' > "$CURL_CONFIG_FILE"
 
-        stage "Download package issues..."
+        stage "Download issues"
         curl --silent \
             --parallel --parallel-immediate --parallel-max 10 \
+            --retry 5 --retry-delay 35 --retry-all-errors \
             --write-out "%{response_code} %{filename_effective}\n" \
             --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
 
-        stage "Process package issues..."
+        stage "Process issues"
 
         # Delete 'empty' files (exactly 2 bytes '[]')
-        find "$CURL_OUTPUT_ISSUES_PACMAN" -type f -size 2c -delete
+        find "$CURL_OUTPUT_DIR" -type f -size 2c -delete
 
-        ERROR_COUNT=0
         while read -r RESPONSE_CODE OUTPUT_FILE; do
             [ "$RESPONSE_CODE" != 200 ] || continue
             PACKAGE="${OUTPUT_FILE##*/}"
@@ -533,13 +625,13 @@ while true; do
             else
                 echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for package: ${CYAN}$PACKAGE${RESET}"
                 mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
-                ERROR_COUNT=$(( ERROR_COUNT + 1 ))
+                CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
             fi
         done < "$CURL_RESULT_FILE"
 
         while read -r PACKAGE_BASE _ PACKAGE; do
-            OUTPUT_FILE="$CURL_OUTPUT_ISSUES_PACMAN"/pkg."$PACKAGE_BASE".json
-            ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+            OUTPUT_FILE="$CURL_OUTPUT_DIR"/issues."$PACKAGE_BASE".json
+            ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
             if [ -e "$OUTPUT_FILE" ]; then
                 cp "$OUTPUT_FILE" "$ISSUES_CACHE_FILE"
             elif [ ! -e "${OUTPUT_FILE}.error" ]; then
@@ -548,20 +640,53 @@ while true; do
             fi
         done < "$PACMAN_LIST_FILE"
 
-        rm -rf "$CURL_OUTPUT_ISSUES_PACMAN"
-        unset CURL_OUTPUT_ISSUES_PACMAN
-
-        if [ "$ERROR_COUNT" -gt 0 ]; then
-            echo
-            printf "Press Enter to continue..."
-            read -r _
-        fi
+        rm -rf "$CURL_OUTPUT_DIR"
+        unset CURL_OUTPUT_DIR
 
     fi
 
+    if [ "$CURL_ERROR_COUNT" -gt 0 ]; then
+        echo
+        printf "Press Enter to continue..."
+        read -r _
+    fi
+
+    # We don't cleanup "$PACKAGE_INFO_CACHE_DIR/archlog".* here as
+    # this directory may contain also logs from AUR fetched by arch-log.
+    if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
+        stage "Render changelogs"
+    fi
+
+    while read -r PACKAGE VER_OLD VER_NEW SOURCE _; do
+        if [ "$SOURCE" = "P" ]; then
+            if [ "$CAN_FETCH_PACMAN_CHANGELOG" -eq 1 ]; then
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ -e "$COMMITS_CACHE_FILE" ] && [ -e "$TAGS_CACHE_FILE" ]; then
+                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+                    # shellcheck disable=SC2086
+                    jq -r $JQ_COLORS --slurpfile tags_data "$TAGS_CACHE_FILE" '
+                      (INDEX($tags_data[][]; .commit.id)) as $tags
+                      | map(. + {
+                          "tag": ($tags[.id].name | if (. == null or . == "") then "" else "(\(.))" end)
+                        }) as $commits
+                      | ([$commits[] | .tag | length] | max) as $max_w
+                      | $commits[]
+                      | "\($GREEN)* \($YELLOW + (.created_at | split("T"))[0]) \( " " * ($max_w - (.tag | length)))\($GREEN + .tag) \($RESET + .title)"
+                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+                fi
+            fi
+        elif [ "$SOURCE" = "A" ]; then
+            : no-op
+        else
+            echo "That's not supposed to happen." >&2
+            exit 1
+        fi
+    done < "$UPGRADE_PACKAGE_LIST_FILE"
+
     rm -f "$PACKAGE_INFO_CACHE_DIR/issues".*
     if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
-        stage "Render package issues..."
+        stage "Render issues"
     fi
 
     UPGRADE_PACKAGE_WITH_ISSUES_LIST_FILE="$(mktemp)"
@@ -569,10 +694,9 @@ while true; do
         ISSUES_COUNT=0
         if [ "$SOURCE" = "P" ]; then
             if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
-                ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/pkg."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ -e "$ISSUES_CACHE_FILE" ]; then
                     PACKAGE_INFO_CACHE_ISSUES="$PACKAGE_INFO_CACHE_DIR/issues.$PACKAGE"
-                    #      | gsub("\n```(?<type>[^\n]*)(?<code>.*)\n```"; "\n" + $H_BLACK + "```" + $BLUE + .type + $GREEN + .code + $H_BLACK + "\n```" + $RESET)
                     # shellcheck disable=SC2086
                     jq -r $JQ_COLORS '
                       .[]
