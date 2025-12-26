@@ -169,8 +169,14 @@ then
 
     elif [ "$1" = "-list" ]; then
 
-        if [ -n "$FZF_PREVIEW_LEFT" ]; then
-            COLUMNS=$(( FZF_PREVIEW_LEFT - 1 - 1 - 2 ))
+        env | sort > myenv
+
+        if [ -n "$FZF_COLUMNS" ]; then
+            if [ -n "$FZF_PREVIEW_LEFT" ]; then
+                COLUMNS=$(( FZF_PREVIEW_LEFT - 1 - 1 - 2 ))
+            else
+                COLUMNS=$(( FZF_COLUMNS - 2 ))
+            fi
         else
             COLUMNS="$(tput cols)"
             COLUMNS=$(( COLUMNS / 2 - 1 - 1 ))
@@ -361,7 +367,7 @@ export PACKAGE_INFO_CACHE_DIR
 
 FOOTER="$(printf '%s\n' \
     "SPACE:     Toggle skip/upgrade | CTRL-A: Upgrade all       | CTRL-U: Skip all" \
-    "ENTER:     Open URL            | CTRL-S: Toggle importance" \
+    "ENTER:     Open URL            | CTRL-S: Toggle importance | ?:      Toggle details" \
     "ALT-ENTER: Start upgrade       | ESC:    Exit" \
 )"
 
@@ -889,6 +895,8 @@ while true; do
         --bind "ctrl-a:execute-silent('$SELF_FILE' -upgrade-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-u:execute-silent('$SELF_FILE' -skip-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "enter:execute-silent('$SELF_FILE' -open-url {})" \
+        --bind '?:toggle-preview+reload-sync('$SELF_FILE' -list)' \
+        --bind 'resize:reload-sync('$SELF_FILE' -list)' \
         --bind "alt-enter:become(echo {})")" || exit 0
 
     [ -n "$SELECTED" ] || exit 0
