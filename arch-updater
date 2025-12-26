@@ -359,7 +359,7 @@ export UPGRADE_SKIP_LIST_FILE
 PACKAGE_INFO_CACHE_DIR="$(mktemp -d)"
 export PACKAGE_INFO_CACHE_DIR
 
-HEADER="$(printf '%s\n' \
+FOOTER="$(printf '%s\n' \
     "SPACE:     Toggle skip/upgrade | CTRL-A: Upgrade all       | CTRL-U: Skip all" \
     "ENTER:     Open URL            | CTRL-S: Toggle importance" \
     "ALT-ENTER: Start upgrade       | ESC:    Exit" \
@@ -877,10 +877,12 @@ while true; do
 
     SELECTED="$("$SELF_FILE" -list | fzf --ansi --disabled --reverse --no-input \
         --highlight-line \
-        --header "$HEADER" --header-border \
+        --footer "$FOOTER" \
+        --footer-border --footer-label "[ Keyboard shortcuts ]" --footer-label-pos 3:top \
         --preview "'$SELF_FILE' -preview {}" \
+        --preview-border --preview-label "[ Package details ]" --preview-label-pos 3:top \
         --preview-window wrap \
-        --bind "space:execute-silent('$SELF_FILE' -toggle-skip {})+down+reload-sync('$SELF_FILE' -list)" \
+        --bind "space:execute-silent('$SELF_FILE' -toggle-skip {})+reload-sync('$SELF_FILE' -list)+down" \
         --bind "ctrl-s:execute-silent('$SELF_FILE' -toggle-group {})+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-a:execute-silent('$SELF_FILE' -upgrade-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-u:execute-silent('$SELF_FILE' -skip-all)+reload-sync('$SELF_FILE' -list)" \
