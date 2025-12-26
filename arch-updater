@@ -329,13 +329,16 @@ fi
 
 if [ "$HAS_CURL" -eq 1 ] && [ "$HAS_JQ" -eq 1 ]; then
     CAN_FETCH_PACMAN_CHANGELOG=1
+    CAN_FETCH_AUR_CHANGELOG=1
 elif [ "$HAS_ARCHLOG" -eq 1 ]; then
     echo "${H_BLACK}[${CYAN}INFO${H_BLACK}]${RESET} package changelog will be fetched using the ${CYAN}arch-log${RESET} utility, please check that packages ${CYAN}curl${RESET} and ${CYAN}jq${RESET} for better performance."
     CAN_FETCH_PACMAN_ISSUES=0
+    CAN_FETCH_AUR_CHANGELOG=0
 else
     echo
     echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} package changelog will not be shown because some necessary utilities are not installed, please check that packages ${CYAN}curl${RESET}, ${CYAN}jq${RESET} or ${CYAN}arch-log${RESET} are installed."
     CAN_FETCH_PACMAN_ISSUES=0
+    CAN_FETCH_AUR_CHANGELOG=0
 fi
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/arch-updater"
@@ -457,7 +460,7 @@ while true; do
     rm -f "$PACKAGE_LIST_PACMAN" "$PACKAGE_LIST_AUR"
     unset PACKAGE_LIST_PACMAN PACKAGE_LIST_AUR
 
-    unset FETCH_ISSUES_PACMAN FETCH_CHANGELOG_PACMAN
+    unset FETCH_ISSUES_PACMAN FETCH_CHANGELOG_PACMAN FETCH_CHANGELOG_AUR
 
     stage "Verify generated package list"
     while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL; do
@@ -487,7 +490,6 @@ while true; do
             if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
                 ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ ! -e "$ISSUES_CACHE_FILE" ] && [ ! -e "${ISSUES_CACHE_FILE}.empty" ]; then
-                    rm -f "$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-*
                     FETCH_ISSUES_PACMAN="$FETCH_ISSUES_PACMAN$PACKAGE "
                 fi
             fi
@@ -495,9 +497,14 @@ while true; do
                 COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ ! -e "$COMMITS_CACHE_FILE" ] || [ ! -e "$TAGS_CACHE_FILE" ]; then
-                    rm -f "$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-*
-                    rm -f "$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-*
                     FETCH_CHANGELOG_PACMAN="$FETCH_CHANGELOG_PACMAN$PACKAGE "
+                fi
+            fi
+        elif [ "$SOURCE" = "A" ]; then
+            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ ! -e "$COMMITS_CACHE_FILE" ]; then
+                    FETCH_CHANGELOG_AUR="$FETCH_CHANGELOG_AUR$PACKAGE "
                 fi
             fi
         fi
@@ -510,17 +517,17 @@ while true; do
         CURL_OUTPUT_DIR="$(mktemp -d)"
         COUNT="$(echo "$FETCH_CHANGELOG_PACMAN" | wc -w)"
 
-        stage "Generate URLs for changelogs from $COUNT package(s)"
-        PACMAN_LIST_FILE="$CURL_OUTPUT_DIR"/pacman.list
+        stage "Generate URLs for changelogs from $COUNT pacman package(s)"
+        PACKAGES_LIST_FILE="$CURL_OUTPUT_DIR"/packages.list
         CURL_CONFIG_FILE="$CURL_OUTPUT_DIR"/curl-config.list
         CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
         # shellcheck disable=SC2086
-        TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_CHANGELOG_PACMAN > "$PACMAN_LIST_FILE"
-        RETRY_CHANGELOG_PACMAN="$FETCH_CHANGELOG_PACMAN"
+        TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_CHANGELOG_PACMAN > "$PACKAGES_LIST_FILE"
+        RETRY_CHANGELOG_PACMAN="$(awk '{printf "%s ", $1}' "$PACKAGES_LIST_FILE")"
 
         while true; do
 
-            cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" \
+            cut -d' ' -f1-2 < "$PACKAGES_LIST_FILE" \
                 | sort -u \
                 | jq -Rr --arg pkg_list_data "$RETRY_CHANGELOG_PACMAN" --arg outputDir "$CURL_OUTPUT_DIR" '
                     ($pkg_list_data | split(" ")) as $pkg_list
@@ -585,13 +592,95 @@ while true; do
         while read -r PACKAGE_BASE _ PACKAGE; do
             OUTPUT_COMMITS_FILE="$CURL_OUTPUT_DIR"/commits."$PACKAGE_BASE".json
             OUTPUT_TAGS_FILE="$CURL_OUTPUT_DIR"/tags."$PACKAGE_BASE".json
+            rm -f "$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-*
+            rm -f "$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-*
             if [ -e "$OUTPUT_COMMITS_FILE" ] && [ -e "$OUTPUT_TAGS_FILE" ]; then
                 COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
                 TAGS_CACHE_FILE="$ISSUES_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 cp "$OUTPUT_TAGS_FILE" "$TAGS_CACHE_FILE"
             fi
-        done < "$PACMAN_LIST_FILE"
+        done < "$PACKAGES_LIST_FILE"
+
+        rm -rf "$CURL_OUTPUT_DIR"
+        unset CURL_OUTPUT_DIR
+
+    fi
+
+    if [ -n "$FETCH_CHANGELOG_AUR" ]; then
+
+        CURL_OUTPUT_DIR="$(mktemp -d)"
+        COUNT="$(echo "$FETCH_CHANGELOG_AUR" | wc -w)"
+
+        stage "Generate URLs for changelogs from $COUNT AUR package(s)"
+        CURL_CONFIG_FILE="$CURL_OUTPUT_DIR"/curl-config.list
+        CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
+        RETRY_CHANGELOG_AUR="$FETCH_CHANGELOG_AUR"
+
+        while true; do
+
+            echo "$RETRY_CHANGELOG_AUR" \
+                | jq -Rr --arg outputDir "$CURL_OUTPUT_DIR" '
+                    split(" ")
+                    | .[]
+                    | select(. | length > 0)
+                    | [
+                        .,
+                        (. | @uri)
+                    ]
+                    | "url=https://api.github.com/repos/archlinux/aur/commits?sha=\(.[1])"
+                    + "\n"
+                    + "output=\($outputDir)/commits.\(.[0]).json"
+                    + "\n"
+                ' > "$CURL_CONFIG_FILE"
+
+            stage "Download changelogs"
+            curl --silent \
+                --parallel --parallel-immediate --parallel-max 10 \
+                --write-out "%{response_code} %{filename_effective}\n" \
+                --config "$CURL_CONFIG_FILE" > "$CURL_RESULT_FILE"
+
+            stage "Process changelogs"
+
+            unset RETRY_CHANGELOG_AUR
+
+            while read -r RESPONSE_CODE OUTPUT_FILE; do
+                [ "$RESPONSE_CODE" != 200 ] || continue
+                PACKAGE="${OUTPUT_FILE##*/}"
+                KIND="${PACKAGE%%.*}"
+                PACKAGE="${PACKAGE#*.}"
+                PACKAGE="${PACKAGE%.*}"
+                if [ "$RESPONSE_CODE" = 429 ]; then
+                    RETRY_CHANGELOG_AUR="$RETRY_CHANGELOG_AUR$PACKAGE "
+                    rm -f "$OUTPUT_FILE"
+                elif [ "$RESPONSE_CODE" = 404 ]; then
+                    echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got ${RED}404${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
+                    rm -f "$OUTPUT_FILE"
+                else
+                    echo "${H_BLACK}[${RED}ERROR${H_BLACK}]${RESET} got ${RED}$RESPONSE_CODE${RESET} response code for $KIND of package: ${CYAN}$PACKAGE${RESET}"
+                    rm -f "$OUTPUT_FILE"
+                    CURL_ERROR_COUNT=$(( CURL_ERROR_COUNT + 1 ))
+                fi
+            done < "$CURL_RESULT_FILE"
+
+            [ -n "$RETRY_CHANGELOG_AUR" ] || break
+
+            echo
+            echo "Got rate limit for $(echo "$RETRY_CHANGELOG_AUR" | wc -w) packages."
+            printf "In 365 seconds, there will be another attempt to download changelogs for there packages..."
+            sleep 365
+            echo
+
+        done
+
+        for PACKAGE in $FETCH_CHANGELOG_AUR; do
+            OUTPUT_COMMITS_FILE="$CURL_OUTPUT_DIR"/commits."$PACKAGE".json
+            rm -f "$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-*
+            if [ -e "$OUTPUT_COMMITS_FILE" ]; then
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
+            fi
+        done
 
         rm -rf "$CURL_OUTPUT_DIR"
         unset CURL_OUTPUT_DIR
@@ -603,17 +692,17 @@ while true; do
         CURL_OUTPUT_DIR="$(mktemp -d)"
         COUNT="$(echo "$FETCH_CHANGELOG_PACMAN" | wc -w)"
 
-        stage "Generate URLs for issues from $COUNT package(s)"
-        PACMAN_LIST_FILE="$CURL_OUTPUT_DIR"/pacman.list
+        stage "Generate URLs for issues from $COUNT pacman package(s)"
+        PACKAGES_LIST_FILE="$CURL_OUTPUT_DIR"/packages.list
         CURL_CONFIG_FILE="$CURL_OUTPUT_DIR"/curl-config.list
         CURL_RESULT_FILE="$CURL_OUTPUT_DIR"/curl-result.list
         # shellcheck disable=SC2086
-        TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_ISSUES_PACMAN > "$PACMAN_LIST_FILE"
-        RETRY_ISSUES_PACMAN="$FETCH_ISSUES_PACMAN"
+        TZ=UTC expac -Q -t "%FT%TZ" "%e %b %n" $FETCH_ISSUES_PACMAN > "$PACKAGES_LIST_FILE"
+        RETRY_ISSUES_PACMAN="$(awk '{printf "%s ", $1}' "$PACKAGES_LIST_FILE")"
 
         while true; do
 
-            cut -d' ' -f1-2 < "$PACMAN_LIST_FILE" \
+            cut -d' ' -f1-2 < "$PACKAGES_LIST_FILE" \
                 | sort -u \
                 | jq -Rr --arg pkg_list_data "$RETRY_ISSUES_PACMAN" --arg outputDir "$CURL_OUTPUT_DIR" '
                     ($pkg_list_data | split(" ")) as $pkg_list
@@ -676,13 +765,14 @@ while true; do
         while read -r PACKAGE_BASE _ PACKAGE; do
             OUTPUT_FILE="$CURL_OUTPUT_DIR"/issues."$PACKAGE_BASE".json
             ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+            rm -f "$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-*
             if [ -e "$OUTPUT_FILE" ]; then
                 cp "$OUTPUT_FILE" "$ISSUES_CACHE_FILE"
             elif [ ! -e "${OUTPUT_FILE}.error" ]; then
                 # this is 'touch' without calling external tool
                 printf '' > "${ISSUES_CACHE_FILE}.empty"
             fi
-        done < "$PACMAN_LIST_FILE"
+        done < "$PACKAGES_LIST_FILE"
 
         rm -rf "$CURL_OUTPUT_DIR"
         unset CURL_OUTPUT_DIR
@@ -721,7 +811,17 @@ while true; do
                 fi
             fi
         elif [ "$SOURCE" = "A" ]; then
-            : no-op
+            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
+                COMMITS_CACHE_FILE="$ISSUES_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ -e "$COMMITS_CACHE_FILE" ]; then
+                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+                    # shellcheck disable=SC2086
+                    jq -r $JQ_COLORS '
+                      .[]
+                      | "\($GREEN)* \($YELLOW + (.commit.committer.date | split("T"))[0]) \($RESET + .commit.message)"
+                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+                fi
+            fi
         else
             echo "That's not supposed to happen." >&2
             exit 1
