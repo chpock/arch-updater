@@ -89,7 +89,6 @@ then
         if [ ! -e "$PACKAGE_INFO_CACHE_INFO" ]; then
             {
                 if [ "$SOURCE" = "[PAC]" ]; then
-                    # pacman -Si "$PACKAGE" --color never | sed -n '/^Repository/,/^$/p' | awk '/^Repository/ {count++} count==1'
                     pacman -Qi "$PACKAGE" --color never
                 elif [ "$SOURCE" = "[AUR]" ]; then
                     yay -Qi "$PACKAGE" --color never
