@@ -442,7 +442,7 @@ while true; do
 
     echo
     stage "Get pacman updated package list"
-    PACKAGE_LIST_PACMAN="$(mktemp)"
+    [ -n "$PACKAGE_LIST_PACMAN" ] || PACKAGE_LIST_PACMAN="$(mktemp)"
     checkupdates --nocolor > "$PACKAGE_LIST_PACMAN" && R=0 || R=$?
 
     if [ "$R" -eq 2 ]; then
@@ -453,22 +453,25 @@ while true; do
     fi
 
     stage "Get AUR updated package list"
-    PACKAGE_LIST_AUR="$(mktemp)"
-    PACKAGE_LIST_AUR_STDERR="$(mktemp)"
+    [ -n "$PACKAGE_LIST_AUR" ] || PACKAGE_LIST_AUR="$(mktemp)"
+    [ -n "$PACKAGE_LIST_AUR_STDERR" ] || PACKAGE_LIST_AUR_STDERR="$(mktemp)"
     yay -Qua --color never > "$PACKAGE_LIST_AUR" 2> "$PACKAGE_LIST_AUR_STDERR" && R=0 || R=$?
 
+    [ ! -s "$PACKAGE_LIST_AUR_STDERR" ] || cat "$PACKAGE_LIST_AUR_STDERR" >&2
+
     if [ "$R" -eq 1 ]; then
-        if [ ! -s "$PACKAGE_LIST_AUR_STDERR" ]; then
+        if [ -s "$PACKAGE_LIST_AUR_STDERR" ]; then
+            exit "$R"
+        else
             echo "No updates."
             HAS_UPDATES_AUR=0
-        else
-            cat "$PACKAGE_LIST_AUR_STDERR" >&2
-            exit "$R"
         fi
     elif [ "$R" -ne 0 ]; then
-        cat "$PACKAGE_LIST_AUR_STDERR" >&2
         exit "$R"
     fi
+
+    rm -f "$PACKAGE_LIST_AUR_STDERR"
+    unset PACKAGE_LIST_AUR_STDERR
 
     [ "$HAS_UPDATES_PACMAN" -eq 0 ] && [ "$HAS_UPDATES_AUR" -eq 0 ] && exit 0 || :
 
