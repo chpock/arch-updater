@@ -27,6 +27,8 @@ AGE_THRESHOLD=172800
 NL='
 '
 
+NAME="${AGE_THRESHOLD:1:2}"
+
 generateAnsiColors() {
     for i in 0:BLACK 1:RED 2:GREEN 3:YELLOW 4:BLUE 5:MAGENTA 6:CYAN 7:WHITE; do
         NAME="${i#*:}"
