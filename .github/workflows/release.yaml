@@ -1,0 +1,46 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          sed -i "s/^\(VERSION\)=.*/\1=$RELEASE_VERSION/" arch-updater
+
+      - name: Check version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          if ! VERSION="$(./arch-updater --version)"; then
+              echo "ERROR: failed to get version."
+              exit 1
+          fi
+          if [ "$VERSION" != "$RELEASE_VERSION" ]; then
+              echo "ERROR: version mismatch: '$VERSION' != '$RELEASE_VERSION'"
+              exit 1
+          fi
+
+      - name: Create Release with Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: arch-updater
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          generate_release_notes: true

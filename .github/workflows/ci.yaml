@@ -4,13 +4,21 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - arch-updater
   pull_request:
     branches: [main]
+    paths:
+      - arch-updater
 
 permissions:
   contents: read
   pull-requests: write
   checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
 
@@ -26,6 +34,7 @@ jobs:
       - name: Run shellcheck
         uses: reviewdog/action-shellcheck@v1
         with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           reporter: github-check
           shellcheck_flags: --shell=dash
           check_all_files_with_shebangs: true
