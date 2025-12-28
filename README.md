@@ -38,6 +38,14 @@ This utility is a standalone shell script, but relies on the following tools:
 **Optional:**
 * `arch-log`: Enhanced changelog fetching for pacman/AUR.
 
+## Installation
+
+**arch-updater** can be installed as [AUR package](https://aur.archlinux.org/packages/arch-updater):
+
+```shell
+yay -S arch-updater
+```
+
 ## Interface Guide
 
 The UI is divided into three sections: the **Package List**, **Package details**, and **Keyboard shortcuts**.
