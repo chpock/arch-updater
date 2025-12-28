@@ -440,6 +440,13 @@ while true; do
     HAS_UPDATES_PACMAN=1
     HAS_UPDATES_AUR=1
 
+    if [ -f /var/lib/pacman/db.lck ]; then
+        echo "ERROR: Packman database is locked, lockfile (/var/lib/pacman/db.lck) exists. Another process might be running." >&2
+        echo >&2
+        echo "Please restart this utility when the database is free." >&2
+        exit 1
+    fi
+
     echo
     stage "Get pacman updated package list"
     [ -n "$PACKAGE_LIST_PACMAN" ] || PACKAGE_LIST_PACMAN="$(mktemp)"
