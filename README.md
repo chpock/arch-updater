@@ -16,11 +16,11 @@ Unlike standard helpers that blindly update everything, this utility focuses on 
 ## Screenshots
 
 ### Main Interface
-![Main UI Screenshot](path/to/screenshot_main.png)
+![Main UI Screenshot](https://raw.githubusercontent.com/chpock/arch-updater/assets/screenshot-ui-changelog.png)
 *The main view showing categorized packages, update status, and stability metrics.*
 
 ### Package Details & Issues
-![Issues UI Screenshot](path/to/screenshot_issues.png)
+![Issues UI Screenshot](https://raw.githubusercontent.com/chpock/arch-updater/assets/screenshot-ui-issues.png)
 *Detailed view showing specific issues and changelogs for a selected package.*
 
 ## Dependencies
