@@ -448,7 +448,7 @@ while true; do
     fi
 
     echo
-    stage "Get pacman updated package list"
+    stage "Get pacman updated package list, exec: checkupdates --nocolor"
     [ -n "$PACKAGE_LIST_PACMAN" ] || PACKAGE_LIST_PACMAN="$(mktemp)"
     checkupdates --nocolor > "$PACKAGE_LIST_PACMAN" && R=0 || R=$?
 
@@ -459,7 +459,7 @@ while true; do
         exit "$R"
     fi
 
-    stage "Get AUR updated package list"
+    stage "Get AUR updated package list, exec: yay -Qua --color never"
     [ -n "$PACKAGE_LIST_AUR" ] || PACKAGE_LIST_AUR="$(mktemp)"
     [ -n "$PACKAGE_LIST_AUR_STDERR" ] || PACKAGE_LIST_AUR_STDERR="$(mktemp)"
     yay -Qua --color never > "$PACKAGE_LIST_AUR" 2> "$PACKAGE_LIST_AUR_STDERR" && R=0 || R=$?
