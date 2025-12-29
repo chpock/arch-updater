@@ -711,10 +711,14 @@ while true; do
             rm -f "$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-*
             rm -f "$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-*
             if [ -e "$OUTPUT_COMMITS_FILE" ] && [ -e "$OUTPUT_TAGS_FILE" ]; then
-                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
-                TAGS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                cp "$OUTPUT_TAGS_FILE" "$TAGS_CACHE_FILE"
+                if [ "$(wc -c < "$OUTPUT_COMMITS_FILE")" -eq 2 ]; then
+                    echo "${H_BLACK}[${YELLOW}WARNING${H_BLACK}]${RESET} got empty response code for commits of package: ${CYAN}$PACKAGE${RESET}"
+                else
+                    COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                    cp "$OUTPUT_COMMITS_FILE" "$COMMITS_CACHE_FILE"
+                    TAGS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                    cp "$OUTPUT_TAGS_FILE" "$TAGS_CACHE_FILE"
+                fi
             fi
         done < "$PACKAGES_LIST_FILE"
 
