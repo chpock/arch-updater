@@ -1171,7 +1171,7 @@ while true; do
         echo "Run AUR upgrade ..."
         yay -S "$@" --color always \
             --noconfirm --sudoloop --needed \
-            --answerclean None --answerdiff None \
+            --answerclean All --answerdiff None \
             --answeredit None --answerupgrade None
     fi
 
