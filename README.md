@@ -46,6 +46,14 @@ This utility is a standalone shell script, but relies on the following tools:
 yay -S arch-updater
 ```
 
+## Important details
+
+### API Rate Limiting and Caching
+
+To retrieve information regarding issues and package changes, the utility interacts with the GitLab and GitHub REST APIs.
+
+To prevent GitHub and GitLab API rate limiting, **arch-updater** caches retrieved data and only initiates a new series of update requests if an hour boundary has been crossed since the last fetch. For example, data from a 09:20 run will be reused for all subsequent executions until 10:00; the first run after 10:00 will then trigger fresh API requests to update the information.
+
 ## Interface Guide
 
 The UI is divided into three sections: the **Package List**, **Package details**, and **Keyboard shortcuts**.
