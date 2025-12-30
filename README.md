@@ -94,6 +94,15 @@ When a package is selected, the preview pane shows:
 
 ## Controls
 
+### Navigation
+Navigation is performed using standard `fzf` key bindings:
+
+* **Up / Down**: Move selection up or down.
+* **PgUp / PgDn**: Scroll the list by page.
+* **Home / End**: Jump to the beginning or end of the list.
+* **Shift-Up / Shift-Down**: Scroll the preview window content.
+
+### Application Actions
 | Key | Action |
 | :--- | :--- |
 | **Space** | Toggle update status (Upgrade / Skip) |

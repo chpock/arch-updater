@@ -1260,6 +1260,7 @@ while true; do
         --bind "?:toggle-preview+reload-sync('$SELF_FILE' -list)" \
         --bind "resize:reload-sync('$SELF_FILE' -list)" \
         --bind 'focus:transform:case {} in -*) if [ "$FZF_ACTION" = up ] || [ "$FZF_ACTION" = page-up ]; then echo up; else echo down; fi;; esac'  \
+        --bind 'home:first,end:last' \
         --bind "alt-enter:become(echo {})")" || exit 0
 
     [ -n "$SELECTED" ] || exit 0
