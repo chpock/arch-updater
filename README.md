@@ -64,24 +64,25 @@ To prevent GitHub and GitLab API rate limiting, **arch-updater** caches retrieve
 The UI is divided into three sections: the **Package List**, **Package details**, and **Keyboard shortcuts**.
 
 ### The Package List
-This is your main workspace. Packages are visually separated to help you focus on what matters.
+This is your main workspace. Packages are grouped into distinct sections with headers to help you focus on what needs attention.
 
-* **Categorization:**
-    * **Bright White:** "Important" packages (e.g., main applications).
-    * **Gray:** "Unimportant" packages (e.g., libraries, dependencies).
-    * *Tip: Use `Ctrl-S` to toggle a package's category.*
+* **Categorization & Layout:**
+    * The list is divided by headers. If a category is empty, its section and header will not be displayed.
+    * **Normal Packages:** Regular packages, displayed in **bright white**.
+    * **Unimportant packages:** Secondary packages, displayed in the **default color**.
+    * **Pinned packages:** Packages that are locked to a specific version, displayed in **gray**.
 
 * **Status Indicators:**
-    * `[UPGR]`: Marked for upgrade.
-    * `[SKIP]`: Will be held back (kept at current version).
+    * `[UPGR]`: The package is marked for an update.
+    * `[SKIP]`: The package will not be updated.
+    * `[PIN]`: The package is pinned and will not be updated.
 
-* **Package origin:**
-    * `[PAC]`: Official repository package.
-    * `[AUR]`: Arch User Repository package.
+* **Package Format:**
+    * The package name and its origin are combined into a single string: `name/repository` (e.g., `linux/core` or `yay/aur`).
 
 * **Risk & Metadata Tags:**
-    * **(X issues):** Indicates open issues exist for the new version.
-    * **(age: X):** Shows how long the package has been in the repo.
+    * **(X issues):** Indicates that open issues exist for the new version.
+    * **(age: X):** Shows how long the package has been in the repository.
         * *Note: only shown for packages less than 48 hours old. Old packages with no issues usually imply lower risk.*
     * **(dep):** Indicates the package was installed as a dependency, not explicitly.
 

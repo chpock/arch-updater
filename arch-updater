@@ -80,9 +80,10 @@ then
     getPackageInfo() {
 
         INFO_KIND="$1"
-        PACKAGE="$(echo "$2" | awk '{print $3}')"
-        SOURCE="$(echo "$2" | awk '{print $2}')"
-        VER_OLD="$(echo "$2" | awk '{print $4}')"
+        PACKAGE="$(echo "$2" | awk '{print $2}')"
+        SOURCE="${PACKAGE##*/}"
+        PACKAGE="${PACKAGE%/*}"
+        VER_OLD="$(echo "$2" | awk '{print $3}')"
         PACKAGE_INFO_CACHE_INFO="$PACKAGE_INFO_CACHE_DIR/info.$PACKAGE"
         PACKAGE_INFO_CACHE_URL="$PACKAGE_INFO_CACHE_DIR/url.$PACKAGE"
         PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
@@ -90,10 +91,10 @@ then
 
         if [ ! -e "$PACKAGE_INFO_CACHE_INFO" ]; then
             {
-                if [ "$SOURCE" = "[PAC]" ]; then
-                    pacman -Qi "$PACKAGE" --color never
-                elif [ "$SOURCE" = "[AUR]" ]; then
+                if [ "$SOURCE" = "aur" ]; then
                     yay -Qi "$PACKAGE" --color never
+                else
+                    pacman -Qi "$PACKAGE" --color never
                 fi
             } | while IFS= read -r LINE; do
                 case "$LINE" in
@@ -231,17 +232,18 @@ then
                 printf "${H_BLACK}[${GREEN}UPGR${H_BLACK}]${RESET} "
             fi
 
-            case "$SOURCE" in
-                P) printf "${H_BLACK}[${BLUE}PAC${H_BLACK}]${RESET} ";;
-                A) printf "${H_BLACK}[${YELLOW}AUR${H_BLACK}]${RESET} ";;
-            esac
-
             if [ "$IS_PINED" -eq 1 ]; then
-                printf "${H_BLACK}%s${RESET} " "$PACKAGE"
+                printf "${H_BLACK}%s${RESET}" "$PACKAGE"
             elif [ "$IS_UNIMPORTANT" -eq 1 ]; then
-                printf "${RESET}%s " "$PACKAGE"
+                printf "${RESET}%s" "$PACKAGE"
             else
-                printf "${H_WHITE}%s${RESET} " "$PACKAGE"
+                printf "${H_WHITE}%s${RESET}" "$PACKAGE"
+            fi
+
+            if [ "$SOURCE" = "aur" ]; then
+                printf "${H_BLACK}/${YELLOW}%s${RESET} " "$SOURCE"
+            else
+                printf "${H_BLACK}/${BLUE}%s${RESET} " "$SOURCE"
             fi
 
             printf "${CYAN}%s${RESET} " "$VER_OLD"
@@ -259,11 +261,11 @@ then
             printf "${H_BLACK}-${MAGENTA}%s${RESET}" "$REVISION"
 
             if [ "$ISSUES_COUNT" -gt 0 ]; then
-                case "$SOURCE" in
-                    P) [ "$ISSUES_COUNT" -eq 1 ] && WORD="issue" || WORD="issues";;
-                    A) [ "$ISSUES_COUNT" -eq 1 ] && WORD="comment" || WORD="comments";;
-                    *) [ "$ISSUES_COUNT" -eq 1 ] && WORD="unknown" || WORD="unknowns";;
-                esac
+                if [ "$SOURCE" = "aur" ]; then
+                    [ "$ISSUES_COUNT" -eq 1 ] && WORD="comment" || WORD="comments"
+                else
+                    [ "$ISSUES_COUNT" -eq 1 ] && WORD="issue" || WORD="issues"
+                fi
                 printf " ${H_BLACK}(${H_RED}%i ${RED}%s${H_BLACK})${RESET}" "$ISSUES_COUNT" "$WORD"
                 LEN_ALL=$(( LEN_ALL + 4 + ${#ISSUES_COUNT} + ${#WORD} ))
             fi
@@ -274,7 +276,7 @@ then
             fi
 
             if [ "$DEP" -eq 1 ]; then
-                WIDTH=$(( 6 + 1 + 5 + 1 + 1 + 1 + 2 + 1 + LEN_ALL ))
+                WIDTH=$(( 6 + 1 + 1 + 1 + 2 + 1 + LEN_ALL ))
                 WIDTH=$(( WIDTH + 6 ))
                 if [ $WIDTH -lt $VIEW_COLUMNS ]; then
                     printf "%$(( VIEW_COLUMNS - WIDTH ))s" ''
@@ -335,7 +337,7 @@ then
 
     elif [ "$1" = "-toggle-group" ]; then
 
-        PACKAGE="$(echo "$2" | awk '{print $3}')"
+        PACKAGE="$(echo "$2" | awk '{sub(/\/.*/, "", $2); print $2}')"
 
         case "$UNIMPORTANT_PACKAGE_LIST" in
             *" $PACKAGE "*)
@@ -354,7 +356,7 @@ then
 
     elif [ "$1" = "-toggle-pin" ]; then
 
-        PACKAGE="$(echo "$2" | awk '{print $3}')"
+        PACKAGE="$(echo "$2" | awk '{sub(/\/.*/, "", $2); print $2}')"
 
         case "$PINED_PACKAGE_LIST" in
             *" $PACKAGE "*)
@@ -373,7 +375,7 @@ then
 
     elif [ "$1" = "-toggle-skip" ]; then
 
-        PACKAGE="$(echo "$2" | awk '{print $3}')"
+        PACKAGE="$(echo "$2" | awk '{sub(/\/.*/, "", $2); print $2}')"
 
         case "$UPGRADE_SKIP_LIST" in
             *" $PACKAGE "*)
@@ -410,7 +412,9 @@ cleanup() {
             "$PACKAGE_LIST_PACMAN" \
             "$PACKAGE_LIST_AUR" \
             "$PACKAGE_LIST_AUR_STDERR" \
-            "$TEMP_RATE_LIMIT_INFO"
+            "$TEMP_RATE_LIMIT_INFO" \
+            "$PACKAGE_LIST_PACMAN_REPO_INFO" \
+            "$PACKAGE_LIST_PACMAN_TEMP"
         do
             [ -z "$TEMP_FN" ] || rm -f "$TEMP_FN"
         done
@@ -432,9 +436,17 @@ unset \
     PINED_PACKAGE_LIST_FILE \
     ISSUES_CACHE_DIR \
     CHANGELOG_CACHE_DIR \
+    CURL_OUTPUT_DIR \
+    PACKAGE_INFO_CACHE_DIR \
     UPGRADE_PACKAGE_LIST_FILE \
+    UPGRADE_PACKAGE_TEMP_LIST_FILE \
     UPGRADE_SKIP_LIST_FILE \
-    PACKAGE_INFO_CACHE_DIR
+    PACKAGE_LIST_PACMAN \
+    PACKAGE_LIST_AUR \
+    PACKAGE_LIST_AUR_STDERR \
+    TEMP_RATE_LIMIT_INFO \
+    PACKAGE_LIST_PACMAN_REPO_INFO \
+    PACKAGE_LIST_PACMAN_TEMP
 
 command -v curl >/dev/null 2>&1 && HAS_CURL=1 || HAS_CURL=0
 command -v jq >/dev/null 2>&1 && HAS_JQ=1 || HAS_JQ=0
@@ -577,32 +589,78 @@ while true; do
     [ "$HAS_UPDATES_PACMAN" -eq 0 ] && [ "$HAS_UPDATES_AUR" -eq 0 ] && exit 0 || :
 
     {
-        pacman -Qd | tr '\n' ' ' | awk '
-            NR == FNR {
-                for (i = 1; i <= NF; i++) {
-                    dep[$i] = 1
-                }
-                next
-            }
 
-            {
-                if ($1 in dep) {
-                    print $1, $2, $4, "P", "1"
-                } else {
-                    print $1, $2, $4, "P", "0"
+        if [ "$HAS_UPDATES_PACMAN" -eq 1 ]; then
+
+            if [ "$HAS_EXPAC" -eq 1 ]; then
+
+                PACKAGE_LIST_PACMAN_REPO_INFO="$(mktemp)"
+                expac -S '%n %r' $(awk '{printf "%s ", $1}' "$PACKAGE_LIST_PACMAN") > "$PACKAGE_LIST_PACMAN_REPO_INFO"
+
+                PACKAGE_LIST_PACMAN_TEMP="$(mktemp)"
+                awk '
+                    NR==FNR {
+                        if (!($1 in repo)) repo[$1]=$2
+                        next
+                    }
+
+                    {
+                        if ($1 in repo) {
+                            in_repo = repo[$1]
+                        } else {
+                            in_repo = "unknown"
+                        }
+                        print $0, in_repo
+                    }
+                ' "$PACKAGE_LIST_PACMAN_REPO_INFO" "$PACKAGE_LIST_PACMAN" \
+                > "$PACKAGE_LIST_PACMAN_TEMP"
+
+                mv -f "$PACKAGE_LIST_PACMAN_TEMP" "$PACKAGE_LIST_PACMAN"
+                rm -f "$PACKAGE_LIST_PACMAN_REPO_INFO"
+                unset PACKAGE_LIST_PACMAN_REPO_INFO PACKAGE_LIST_PACMAN_TEMP
+
+            fi
+
+            pacman -Qd | tr '\n' ' ' | awk '
+                NR == FNR {
+                    for (i = 1; i <= NF; i++) {
+                        dep[$i] = 1
+                    }
+                    next
                 }
-            }
-        ' - "$PACKAGE_LIST_PACMAN"
-        awk '
-            {
-                print $1, $2, $4, "A", "0"
-            }
-        ' "$PACKAGE_LIST_AUR"
+
+                {
+                    if ($5 == "") {
+                        in_repo = "pacman"
+                    } else {
+                        in_repo = $5
+                    }
+
+                    if ($1 in dep) {
+                        is_dep = "1"
+                    } else {
+                        is_dep = "0"
+                    }
+
+                    print $1, $2, $4, in_repo, is_dep
+                }
+            ' - "$PACKAGE_LIST_PACMAN"
+
+        fi
+
+        if [ "$HAS_UPDATES_AUR" -eq 1 ]; then
+            awk '
+                {
+                    print $1, $2, $4, "aur", "0"
+                }
+            ' "$PACKAGE_LIST_AUR"
+        fi
+
     } | sort | awk '
         {
             len1 = length($2)
             len2 = length($3)
-            len_all = length($1) + len1 + len2
+            len_all = length($1) + len1 + len2 + 1 + length($4)
             min_len = (len1 < len2) ? len1 : len2
             prefix = ""
             revision = ""
@@ -673,7 +731,14 @@ while true; do
                 exit 1
             fi
         fi
-        if [ "$SOURCE" = "P" ]; then
+        if [ "$SOURCE" = "aur" ]; then
+            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+                if [ ! -e "$COMMITS_CACHE_FILE" ]; then
+                    FETCH_CHANGELOG_AUR="$FETCH_CHANGELOG_AUR$PACKAGE "
+                fi
+            fi
+        else
             if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
                 ISSUES_CACHE_FILE="$ISSUES_CACHE_DIR"/issues."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ ! -e "$ISSUES_CACHE_FILE" ] && [ ! -e "${ISSUES_CACHE_FILE}.empty" ]; then
@@ -685,13 +750,6 @@ while true; do
                 TAGS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/tags."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
                 if [ ! -e "$COMMITS_CACHE_FILE" ] || [ ! -e "$TAGS_CACHE_FILE" ]; then
                     FETCH_CHANGELOG_PACMAN="$FETCH_CHANGELOG_PACMAN$PACKAGE "
-                fi
-            fi
-        elif [ "$SOURCE" = "A" ]; then
-            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
-                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-                if [ ! -e "$COMMITS_CACHE_FILE" ]; then
-                    FETCH_CHANGELOG_AUR="$FETCH_CHANGELOG_AUR$PACKAGE "
                 fi
             fi
         fi
@@ -1062,7 +1120,43 @@ while true; do
         AGE="-"
         ISSUES_COUNT=0
 
-        if [ "$SOURCE" = "P" ]; then
+        if [ "$SOURCE" = "aur" ]; then
+
+            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
+
+                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
+
+                if [ -e "$COMMITS_CACHE_FILE" ]; then
+
+                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
+
+                    # shellcheck disable=SC2086
+                    jq -r $JQ_COLORS '
+                      .[]
+                      | "\($GREEN)* \($YELLOW + (.commit.committer.date | split("T"))[0]) \($RESET + .commit.message)"
+                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
+
+                    AGE="$(jq -r --argjson threshold "$AGE_THRESHOLD" '
+                      .[0].commit.committer.date as $commit_date
+                      | ([ (now - ($commit_date | fromdateiso8601)), 3600 ] | max) as $diff
+                      | if ($diff > $threshold) then
+                          "-"
+                        else
+                          ($diff / 86400 | floor) as $days
+                          | (($diff % 86400) / 3600 | floor) as $hours
+                          | [
+                              (if $days > 0 then "\($days)d" else empty end),
+                              (if $hours > 0 then "\($hours)h" else empty end)
+                            ]
+                          | join("")
+                        end
+                    ' "$COMMITS_CACHE_FILE")"
+
+                fi
+
+            fi
+
+        else
 
             if [ "$CAN_FETCH_PACMAN_ISSUES" -eq 1 ]; then
 
@@ -1138,45 +1232,6 @@ while true; do
 
             fi
 
-        elif [ "$SOURCE" = "A" ]; then
-
-            if [ "$CAN_FETCH_AUR_CHANGELOG" -eq 1 ]; then
-
-                COMMITS_CACHE_FILE="$CHANGELOG_CACHE_DIR"/commits."$PACKAGE".stamp-"$ISSUE_FILE_STAMP"
-
-                if [ -e "$COMMITS_CACHE_FILE" ]; then
-
-                    PACKAGE_INFO_CACHE_ARCHLOG="$PACKAGE_INFO_CACHE_DIR/archlog.$PACKAGE"
-
-                    # shellcheck disable=SC2086
-                    jq -r $JQ_COLORS '
-                      .[]
-                      | "\($GREEN)* \($YELLOW + (.commit.committer.date | split("T"))[0]) \($RESET + .commit.message)"
-                    ' "$COMMITS_CACHE_FILE" > "$PACKAGE_INFO_CACHE_ARCHLOG"
-
-                    AGE="$(jq -r --argjson threshold "$AGE_THRESHOLD" '
-                      .[0].commit.committer.date as $commit_date
-                      | ([ (now - ($commit_date | fromdateiso8601)), 3600 ] | max) as $diff
-                      | if ($diff > $threshold) then
-                          "-"
-                        else
-                          ($diff / 86400 | floor) as $days
-                          | (($diff % 86400) / 3600 | floor) as $hours
-                          | [
-                              (if $days > 0 then "\($days)d" else empty end),
-                              (if $hours > 0 then "\($hours)h" else empty end)
-                            ]
-                          | join("")
-                        end
-                    ' "$COMMITS_CACHE_FILE")"
-
-                fi
-
-            fi
-
-        else
-            echo "That's not supposed to happen." >&2
-            exit 1
         fi
 
         echo "$PACKAGE" "$VER_OLD" "$VER_NEW" "$SOURCE" "$DEP" "$PREFIX" "$REST" "$REVISION" "$LEN_ALL" "$AGE" "$ISSUES_COUNT"
@@ -1214,7 +1269,7 @@ while true; do
 
     set --
     while read -r PACKAGE _ VER_NEW SOURCE _; do
-        if [ "$SOURCE" = "P" ]; then
+        if [ "$SOURCE" != "aur" ]; then
             case "$PINED_PACKAGE_LIST$UPGRADE_SKIP_LIST" in
                 *" $PACKAGE "*) : no-op;;
                 *)
@@ -1257,7 +1312,7 @@ while true; do
 
     set --
     while read -r PACKAGE _ VER_NEW SOURCE _; do
-        if [ "$SOURCE" = "A" ]; then
+        if [ "$SOURCE" = "aur" ]; then
             case "$PINED_PACKAGE_LIST$UPGRADE_SKIP_LIST" in
                 *" $PACKAGE "*) : no-op;;
                 *)
