@@ -189,7 +189,14 @@ then
 
     elif [ "$1" = "-preview" ]; then
 
-        getPackageInfo "info" "$2"
+        case "$2" in
+            -*)
+                : no-op
+                ;;
+            *)
+                getPackageInfo "info" "$2"
+                ;;
+        esac
 
     elif [ "$1" = "-open-url" ]; then
 
@@ -273,6 +280,15 @@ then
             echo
         }
 
+        getSeparator() {
+            # The width of the string: '[ $1 ]'
+            WIDTH_TITLE=$(( 2 + ${#1} + 2 ))
+            WIDTH_START=$(( (COLUMNS - WIDTH_TITLE) / 2 ))
+            WIDTH_END=$(( COLUMNS - WIDTH_START - WIDTH_TITLE - 1))
+            printf "${H_BLACK}%${WIDTH_START}s[_${RESET}%s${H_BLACK}_]%${WIDTH_END}s${RESET}\n" '' "$1" '' \
+                | tr ' ' '-' | tr '_' ' '
+        }
+
         while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL AGE ISSUES_COUNT; do
             case "$UNIMPORTANT_PACKAGE_LIST" in
                 *" $PACKAGE "*) IS_UNIMPORTANT=1;;
@@ -289,7 +305,10 @@ then
             fi
         done < "$UPGRADE_PACKAGE_LIST_FILE"
 
-        [ -z "$LIST_UNIMPORTANT" ] || printf '%s' "$LIST_UNIMPORTANT"
+        if [ -n "$LIST_UNIMPORTANT" ]; then
+            getSeparator "Unimportant_packages"
+            printf '%s' "$LIST_UNIMPORTANT"
+        fi
 
     elif [ "$1" = "-toggle-group" ]; then
 
@@ -1092,6 +1111,7 @@ while true; do
     mv -f "$UPGRADE_PACKAGE_TEMP_LIST_FILE" "$UPGRADE_PACKAGE_LIST_FILE"
     unset UPGRADE_PACKAGE_TEMP_LIST_FILE
 
+    # shellcheck disable=SC2016
     SELECTED="$("$SELF_FILE" -list | fzf --ansi --disabled --reverse --no-input \
         --highlight-line \
         --footer "$FOOTER" \
@@ -1108,6 +1128,7 @@ while true; do
         --bind "enter:execute-silent('$SELF_FILE' -open-url {})" \
         --bind "?:toggle-preview+reload-sync('$SELF_FILE' -list)" \
         --bind "resize:reload-sync('$SELF_FILE' -list)" \
+        --bind 'focus:transform:case {} in -*) if [ "$FZF_ACTION" = up ] || [ "$FZF_ACTION" = page-up ]; then echo up; else echo down; fi;; esac'  \
         --bind "alt-enter:become(echo {})")" || exit 0
 
     [ -n "$SELECTED" ] || exit 0
