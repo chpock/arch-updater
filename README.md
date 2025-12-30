@@ -97,6 +97,7 @@ When a package is selected, the preview pane shows:
 | :--- | :--- |
 | **Space** | Toggle update status (Upgrade / Skip) |
 | **Ctrl-S** | Toggle category (Important / Unimportant) |
+| **Ctrl-P** | Toggle pinning (Pin / Unpin) |
 | **Enter** | Open package URL (Check news/breaking changes) |
 | **?** | Toggle Detail/Preview pane |
 | **Ctrl-A** | Mark **ALL** packages for upgrade |
