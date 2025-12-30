@@ -6,12 +6,13 @@ Unlike standard helpers that blindly update everything, this utility focuses on 
 
 ## Key Features
 
-* **Unified Management:** Handle both official `pacman` repositories and AUR packages in a single view.
-* **Selective Updates:** Cherry-pick exactly which packages to upgrade and which to hold back.
 * **Risk Assessment:** Instantly gauge the stability of an update via package age indicators (filtering out "fresh" and potentially unstable packages) and open issue tracking.
 * **Smart Categorization:** Separate packages into "Important" (apps you monitor) and "Unimportant" (libraries, deps) to reduce cognitive load.
 * **Deep Insight:** View detailed changelogs, diffs, and warnings relative to your currently installed version before committing to an update.
 * **Quick Links:** Jump directly to upstream URLs to check for breaking changes or new features.
+* **Selective Updates:** Cherry-pick exactly which packages to upgrade and which to hold back.
+* **Version Pinning:** Permanently lock specific package versions to exclude them from future update cycles and ensure stability against accidental upgrades.
+* **Unified Management:** Handle both official `pacman` repositories and AUR packages in a single view.
 
 ## Screenshots
 
@@ -53,6 +54,10 @@ yay -S arch-updater
 To retrieve information regarding issues and package changes, the utility interacts with the GitLab and GitHub REST APIs.
 
 To prevent GitHub and GitLab API rate limiting, **arch-updater** caches retrieved data and only initiates a new series of update requests if an hour boundary has been crossed since the last fetch. For example, data from a 09:20 run will be reused for all subsequent executions until 10:00; the first run after 10:00 will then trigger fresh API requests to update the information.
+
+### Version Pinning
+
+**arch-updater** manages pinned packages through its own configuration rather than modifying `/etc/pacman.conf`, ensuring system integrity without requiring root privileges. Consequently, these update restrictions apply only when using this tool; performing a manual system upgrade via `sudo pacman -Syu` will bypass these pins and update all packages to their latest versions.
 
 ## Interface Guide
 

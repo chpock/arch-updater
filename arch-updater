@@ -69,11 +69,13 @@ fi
 if [ -n "$UPGRADE_PACKAGE_LIST_FILE" ] \
     && [ -n "$UPGRADE_SKIP_LIST_FILE" ] \
     && [ -n "$UNIMPORTANT_PACKAGE_LIST_FILE" ] \
+    && [ -n "$PINED_PACKAGE_LIST_FILE" ] \
     && [ -n "$PACKAGE_INFO_CACHE_DIR" ]
 then
 
     UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
     UNIMPORTANT_PACKAGE_LIST=" $(cat "$UNIMPORTANT_PACKAGE_LIST_FILE") "
+    PINED_PACKAGE_LIST=" $(tr '\n' ' ' < "$PINED_PACKAGE_LIST_FILE")"
 
     getPackageInfo() {
 
@@ -207,23 +209,26 @@ then
 
         if [ -n "$FZF_COLUMNS" ]; then
             if [ -n "$FZF_PREVIEW_LEFT" ]; then
-                COLUMNS=$(( FZF_PREVIEW_LEFT - 1 - 1 - 2 ))
+                VIEW_COLUMNS=$(( FZF_PREVIEW_LEFT - 1 - 1 - 2 ))
             else
-                COLUMNS=$(( FZF_COLUMNS - 2 ))
+                VIEW_COLUMNS=$(( FZF_COLUMNS - 2 ))
             fi
         else
-            COLUMNS="$(tput cols)"
-            COLUMNS=$(( COLUMNS / 2 - 1 - 1 ))
+            VIEW_COLUMNS="$(tput cols)"
+            VIEW_COLUMNS=$(( VIEW_COLUMNS / 2 - 1 - 1 ))
         fi
 
         LIST_UNIMPORTANT=""
+        LIST_PINED=""
 
         # shellcheck disable=SC2059
         getLine() {
-            if [ "$IS_SKIP" -eq 0 ]; then
-                printf "${H_BLACK}[${GREEN}UPGR${H_BLACK}]${RESET} "
+            if [ "$IS_PINED" -eq 1 ]; then
+                printf "${H_BLACK}[${RED}PIN${H_BLACK}] ${RESET} "
+            elif [ "$IS_SKIP" -eq 1 ]; then
+                printf "${H_BLACK}[SKIP${H_BLACK}]${RESET} "
             else
-                printf "${H_BLACK}[${RED}SKIP${H_BLACK}]${RESET} "
+                printf "${H_BLACK}[${GREEN}UPGR${H_BLACK}]${RESET} "
             fi
 
             case "$SOURCE" in
@@ -231,10 +236,12 @@ then
                 A) printf "${H_BLACK}[${YELLOW}AUR${H_BLACK}]${RESET} ";;
             esac
 
-            if [ "$IS_UNIMPORTANT" -eq 0 ]; then
-                printf "${H_WHITE}%s${RESET} " "$PACKAGE"
-            else
+            if [ "$IS_PINED" -eq 1 ]; then
+                printf "${H_BLACK}%s${RESET} " "$PACKAGE"
+            elif [ "$IS_UNIMPORTANT" -eq 1 ]; then
                 printf "${RESET}%s " "$PACKAGE"
+            else
+                printf "${H_WHITE}%s${RESET} " "$PACKAGE"
             fi
 
             printf "${CYAN}%s${RESET} " "$VER_OLD"
@@ -269,8 +276,8 @@ then
             if [ "$DEP" -eq 1 ]; then
                 WIDTH=$(( 6 + 1 + 5 + 1 + 1 + 1 + 2 + 1 + LEN_ALL ))
                 WIDTH=$(( WIDTH + 6 ))
-                if [ $WIDTH -lt $COLUMNS ]; then
-                    printf "%$(( COLUMNS - WIDTH ))s" ''
+                if [ $WIDTH -lt $VIEW_COLUMNS ]; then
+                    printf "%$(( VIEW_COLUMNS - WIDTH ))s" ''
                 else
                     printf ' '
                 fi
@@ -283,26 +290,37 @@ then
         getSeparator() {
             # The width of the string: '[ $1 ]'
             WIDTH_TITLE=$(( 2 + ${#1} + 2 ))
-            WIDTH_START=$(( (COLUMNS - WIDTH_TITLE) / 2 ))
-            WIDTH_END=$(( COLUMNS - WIDTH_START - WIDTH_TITLE - 1))
+            WIDTH_START=$(( (VIEW_COLUMNS - WIDTH_TITLE) / 2 ))
+            WIDTH_END=$(( VIEW_COLUMNS - WIDTH_START - WIDTH_TITLE - 1))
             printf "${H_BLACK}%${WIDTH_START}s[_${RESET}%s${H_BLACK}_]%${WIDTH_END}s${RESET}\n" '' "$1" '' \
                 | tr ' ' '-' | tr '_' ' '
         }
 
         while read -r PACKAGE VER_OLD VER_NEW SOURCE DEP PREFIX REST REVISION LEN_ALL AGE ISSUES_COUNT; do
-            case "$UNIMPORTANT_PACKAGE_LIST" in
-                *" $PACKAGE "*) IS_UNIMPORTANT=1;;
-                *) IS_UNIMPORTANT=0;;
+
+            case "$PINED_PACKAGE_LIST" in
+                *" $PACKAGE "*) IS_PINED=1;;
+                *)
+                    IS_PINED=0
+                    case "$UNIMPORTANT_PACKAGE_LIST" in
+                        *" $PACKAGE "*) IS_UNIMPORTANT=1;;
+                        *) IS_UNIMPORTANT=0;;
+                    esac
+                    case "$UPGRADE_SKIP_LIST" in
+                        *" $PACKAGE "*) IS_SKIP=1;;
+                        *) IS_SKIP=0;;
+                    esac
+                    ;;
             esac
-            case "$UPGRADE_SKIP_LIST" in
-                *" $PACKAGE "*) IS_SKIP=1;;
-                *) IS_SKIP=0;;
-            esac
-            if [ "$IS_UNIMPORTANT" -eq 0 ]; then
-                getLine
-            else
+
+            if [ "$IS_PINED" -eq 1 ]; then
+                LIST_PINED="$LIST_PINED$(getLine)$NL"
+            elif [ "$IS_UNIMPORTANT" -eq 1 ]; then
                 LIST_UNIMPORTANT="$LIST_UNIMPORTANT$(getLine)$NL"
+            else
+                getLine
             fi
+
         done < "$UPGRADE_PACKAGE_LIST_FILE"
 
         if [ -n "$LIST_UNIMPORTANT" ]; then
@@ -310,15 +328,44 @@ then
             printf '%s' "$LIST_UNIMPORTANT"
         fi
 
+        if [ -n "$LIST_PINED" ]; then
+            getSeparator "Pined_packages"
+            printf '%s' "$LIST_PINED"
+        fi
+
     elif [ "$1" = "-toggle-group" ]; then
 
         PACKAGE="$(echo "$2" | awk '{print $3}')"
-        if [ "${UNIMPORTANT_PACKAGE_LIST#*" $PACKAGE "}" = "$UNIMPORTANT_PACKAGE_LIST" ]; then
-            UNIMPORTANT_PACKAGE_LIST="$UNIMPORTANT_PACKAGE_LIST $PACKAGE"
-        else
-            UNIMPORTANT_PACKAGE_LIST="${UNIMPORTANT_PACKAGE_LIST%" $PACKAGE "*} ${UNIMPORTANT_PACKAGE_LIST#*" $PACKAGE "}"
-        fi
+
+        case "$UNIMPORTANT_PACKAGE_LIST" in
+            *" $PACKAGE "*)
+                UNIMPORTANT_PACKAGE_LIST="${UNIMPORTANT_PACKAGE_LIST%" $PACKAGE "*} ${UNIMPORTANT_PACKAGE_LIST#*" $PACKAGE "}"
+                ;;
+            *)
+                UNIMPORTANT_PACKAGE_LIST="$UNIMPORTANT_PACKAGE_LIST $PACKAGE"
+                ;;
+        esac
+
         echo "$UNIMPORTANT_PACKAGE_LIST" > "$UNIMPORTANT_PACKAGE_LIST_FILE"
+
+    elif [ "$1" = "-toggle-pin" ]; then
+
+        PACKAGE="$(echo "$2" | awk '{print $3}')"
+
+        case "$PINED_PACKAGE_LIST" in
+            *" $PACKAGE "*)
+                PINED_PACKAGE_LIST="${PINED_PACKAGE_LIST%" $PACKAGE "*} ${PINED_PACKAGE_LIST#*" $PACKAGE "}"
+                ;;
+            *)
+                PINED_PACKAGE_LIST="$PINED_PACKAGE_LIST$PACKAGE"
+                ;;
+        esac
+
+        echo "$PINED_PACKAGE_LIST" \
+            | sed -e 's/\s\+/ /g' -e 's/^\s*//' -e 's/\s*$//' \
+            | tr ' ' '\n' \
+            | sort -u \
+            > "$PINED_PACKAGE_LIST_FILE"
 
     elif [ "$1" = "-toggle-skip" ]; then
 
@@ -369,6 +416,7 @@ trap 'cleanup $?' EXIT INT TERM HUP
 unset \
     ISSUES_CURL_FILE \
     UNIMPORTANT_PACKAGE_LIST_FILE \
+    PINED_PACKAGE_LIST_FILE \
     ISSUES_CACHE_DIR \
     CHANGELOG_CACHE_DIR \
     UPGRADE_PACKAGE_LIST_FILE \
@@ -403,9 +451,14 @@ fi
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/arch-updater"
 mkdir -p "$CONFIG_DIR"
+
 UNIMPORTANT_PACKAGE_LIST_FILE="$CONFIG_DIR/unimportant-packages.list"
 export UNIMPORTANT_PACKAGE_LIST_FILE
 [ -e "$UNIMPORTANT_PACKAGE_LIST_FILE" ] || touch "$UNIMPORTANT_PACKAGE_LIST_FILE"
+
+PINED_PACKAGE_LIST_FILE="$CONFIG_DIR/pined-packages.txt"
+export PINED_PACKAGE_LIST_FILE
+[ -e "$PINED_PACKAGE_LIST_FILE" ] || touch "$PINED_PACKAGE_LIST_FILE"
 
 ISSUES_CACHE_DIR="${XDG_CACHE_DIR:-$HOME/.cache}/arch-updater/package-issues"
 CHANGELOG_CACHE_DIR="${XDG_CACHE_DIR:-$HOME/.cache}/arch-updater/package-changelog"
@@ -422,8 +475,8 @@ export PACKAGE_INFO_CACHE_DIR
 
 FOOTER="$(printf '%s\n' \
     "SPACE:     Toggle skip/upgrade | CTRL-A: Upgrade all       | CTRL-U: Skip all" \
-    "ENTER:     Open URL            | CTRL-S: Toggle importance | ?:      Toggle details" \
-    "ALT-ENTER: Start upgrade       | ESC:    Exit" \
+    "ENTER:     Open URL            | CTRL-S: Toggle importance | CTRL-P: Toggle pin" \
+    "ALT-ENTER: Start an upgrade    | ?:      Toggle details    | ESC:    Exit" \
 )"
 
 ISSUE_FILE_STAMP="$(date --utc +%Y%m%d%H)"
@@ -1123,6 +1176,7 @@ while true; do
         --header-border \
         --bind "space:execute-silent('$SELF_FILE' -toggle-skip {})+reload-sync('$SELF_FILE' -list)+down" \
         --bind "ctrl-s:execute-silent('$SELF_FILE' -toggle-group {})+reload-sync('$SELF_FILE' -list)" \
+        --bind "ctrl-p:execute-silent('$SELF_FILE' -toggle-pin {})+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-a:execute-silent('$SELF_FILE' -upgrade-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "ctrl-u:execute-silent('$SELF_FILE' -skip-all)+reload-sync('$SELF_FILE' -list)" \
         --bind "enter:execute-silent('$SELF_FILE' -open-url {})" \
@@ -1134,13 +1188,17 @@ while true; do
     [ -n "$SELECTED" ] || exit 0
 
     UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
+    PINED_PACKAGE_LIST=" $(tr '\n' ' ' < "$PINED_PACKAGE_LIST_FILE")"
 
     set --
     while read -r PACKAGE _ VER_NEW SOURCE _; do
         if [ "$SOURCE" = "P" ]; then
-            if [ "${UPGRADE_SKIP_LIST#*" $PACKAGE "}" = "$UPGRADE_SKIP_LIST" ]; then
-                set -- "$@" "${PACKAGE}=${VER_NEW}"
-            fi
+            case "$PINED_PACKAGE_LIST $UPGRADE_SKIP_LIST" in
+                *" $PACKAGE "*) : no-op;;
+                *)
+                    set -- "$@" "${PACKAGE}=${VER_NEW}"
+                    ;;
+            esac
         fi
     done < "$UPGRADE_PACKAGE_LIST_FILE"
 
@@ -1178,9 +1236,12 @@ while true; do
     set --
     while read -r PACKAGE _ VER_NEW SOURCE _; do
         if [ "$SOURCE" = "A" ]; then
-            if [ "${UPGRADE_SKIP_LIST#*" $PACKAGE "}" = "$UPGRADE_SKIP_LIST" ]; then
-                set -- "$@" "${PACKAGE}"
-            fi
+            case "$PINED_PACKAGE_LIST $UPGRADE_SKIP_LIST" in
+                *" $PACKAGE "*) : no-op;;
+                *)
+                    set -- "$@" "${PACKAGE}"
+                    ;;
+            esac
         fi
     done < "$UPGRADE_PACKAGE_LIST_FILE"
 
