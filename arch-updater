@@ -73,8 +73,8 @@ if [ -n "$UPGRADE_PACKAGE_LIST_FILE" ] \
     && [ -n "$PACKAGE_INFO_CACHE_DIR" ]
 then
 
-    UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
-    UNIMPORTANT_PACKAGE_LIST=" $(cat "$UNIMPORTANT_PACKAGE_LIST_FILE") "
+    UPGRADE_SKIP_LIST=" $(tr '\n' ' ' < "$UPGRADE_SKIP_LIST_FILE")"
+    UNIMPORTANT_PACKAGE_LIST=" $(tr '\n' ' ' < "$UNIMPORTANT_PACKAGE_LIST_FILE")"
     PINED_PACKAGE_LIST=" $(tr '\n' ' ' < "$PINED_PACKAGE_LIST_FILE")"
 
     getPackageInfo() {
@@ -342,11 +342,15 @@ then
                 UNIMPORTANT_PACKAGE_LIST="${UNIMPORTANT_PACKAGE_LIST%" $PACKAGE "*} ${UNIMPORTANT_PACKAGE_LIST#*" $PACKAGE "}"
                 ;;
             *)
-                UNIMPORTANT_PACKAGE_LIST="$UNIMPORTANT_PACKAGE_LIST $PACKAGE"
+                UNIMPORTANT_PACKAGE_LIST="$UNIMPORTANT_PACKAGE_LIST$PACKAGE"
                 ;;
         esac
 
-        echo "$UNIMPORTANT_PACKAGE_LIST" > "$UNIMPORTANT_PACKAGE_LIST_FILE"
+        echo "$UNIMPORTANT_PACKAGE_LIST" \
+            | sed -e 's/\s\+/ /g' -e 's/^\s*//' -e 's/\s*$//' \
+            | tr ' ' '\n' \
+            | sort -u \
+            > "$UNIMPORTANT_PACKAGE_LIST_FILE"
 
     elif [ "$1" = "-toggle-pin" ]; then
 
@@ -370,12 +374,21 @@ then
     elif [ "$1" = "-toggle-skip" ]; then
 
         PACKAGE="$(echo "$2" | awk '{print $3}')"
-        if [ "${UPGRADE_SKIP_LIST#*" $PACKAGE "}" = "$UPGRADE_SKIP_LIST" ]; then
-            UPGRADE_SKIP_LIST="$UPGRADE_SKIP_LIST $PACKAGE"
-        else
-            UPGRADE_SKIP_LIST="${UPGRADE_SKIP_LIST%" $PACKAGE "*} ${UPGRADE_SKIP_LIST#*" $PACKAGE "}"
-        fi
-        echo "$UPGRADE_SKIP_LIST" > "$UPGRADE_SKIP_LIST_FILE"
+
+        case "$UPGRADE_SKIP_LIST" in
+            *" $PACKAGE "*)
+                UPGRADE_SKIP_LIST="${UPGRADE_SKIP_LIST%" $PACKAGE "*} ${UPGRADE_SKIP_LIST#*" $PACKAGE "}"
+                ;;
+            *)
+                UPGRADE_SKIP_LIST="$UPGRADE_SKIP_LIST$PACKAGE"
+                ;;
+        esac
+
+        echo "$UPGRADE_SKIP_LIST" \
+            | sed -e 's/\s\+/ /g' -e 's/^\s*//' -e 's/\s*$//' \
+            | tr ' ' '\n' \
+            | sort -u \
+            > "$UPGRADE_SKIP_LIST_FILE"
 
     fi
 
@@ -452,9 +465,18 @@ fi
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/arch-updater"
 mkdir -p "$CONFIG_DIR"
 
-UNIMPORTANT_PACKAGE_LIST_FILE="$CONFIG_DIR/unimportant-packages.list"
+UNIMPORTANT_PACKAGE_LIST_FILE="$CONFIG_DIR/unimportant-packages.txt"
 export UNIMPORTANT_PACKAGE_LIST_FILE
 [ -e "$UNIMPORTANT_PACKAGE_LIST_FILE" ] || touch "$UNIMPORTANT_PACKAGE_LIST_FILE"
+
+# upgrade unimportant-packages.list from v0.0.5 to actual format
+if [ -e "${UNIMPORTANT_PACKAGE_LIST_FILE%.*}.list" ]; then
+    sed -e 's/\s\+/ /g' -e 's/^\s*//' -e 's/\s*$//' "${UNIMPORTANT_PACKAGE_LIST_FILE%.*}.list" \
+        | tr ' ' '\n' \
+        | sort -u \
+        > "$UNIMPORTANT_PACKAGE_LIST_FILE"
+    rm -f "${UNIMPORTANT_PACKAGE_LIST_FILE%.*}.list"
+fi
 
 PINED_PACKAGE_LIST_FILE="$CONFIG_DIR/pined-packages.txt"
 export PINED_PACKAGE_LIST_FILE
@@ -1187,13 +1209,13 @@ while true; do
 
     [ -n "$SELECTED" ] || exit 0
 
-    UPGRADE_SKIP_LIST=" $(cat "$UPGRADE_SKIP_LIST_FILE") "
+    UPGRADE_SKIP_LIST=" $(tr '\n' ' ' < "$UPGRADE_SKIP_LIST_FILE")"
     PINED_PACKAGE_LIST=" $(tr '\n' ' ' < "$PINED_PACKAGE_LIST_FILE")"
 
     set --
     while read -r PACKAGE _ VER_NEW SOURCE _; do
         if [ "$SOURCE" = "P" ]; then
-            case "$PINED_PACKAGE_LIST $UPGRADE_SKIP_LIST" in
+            case "$PINED_PACKAGE_LIST$UPGRADE_SKIP_LIST" in
                 *" $PACKAGE "*) : no-op;;
                 *)
                     set -- "$@" "${PACKAGE}=${VER_NEW}"
@@ -1236,7 +1258,7 @@ while true; do
     set --
     while read -r PACKAGE _ VER_NEW SOURCE _; do
         if [ "$SOURCE" = "A" ]; then
-            case "$PINED_PACKAGE_LIST $UPGRADE_SKIP_LIST" in
+            case "$PINED_PACKAGE_LIST$UPGRADE_SKIP_LIST" in
                 *" $PACKAGE "*) : no-op;;
                 *)
                     set -- "$@" "${PACKAGE}"
