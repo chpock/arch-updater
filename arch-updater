@@ -595,6 +595,7 @@ while true; do
             if [ "$HAS_EXPAC" -eq 1 ]; then
 
                 PACKAGE_LIST_PACMAN_REPO_INFO="$(mktemp)"
+                # shellcheck disable=SC2046
                 expac -S '%n %r' $(awk '{printf "%s ", $1}' "$PACKAGE_LIST_PACMAN") > "$PACKAGE_LIST_PACMAN_REPO_INFO"
 
                 PACKAGE_LIST_PACMAN_TEMP="$(mktemp)"
