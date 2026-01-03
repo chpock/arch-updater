@@ -10,6 +10,7 @@ Unlike standard helpers that blindly update everything, this utility focuses on 
 * **Smart Categorization:** Separate packages into "Important" (apps you monitor) and "Unimportant" (libraries, deps) to reduce cognitive load.
 * **Deep Insight:** View detailed changelogs, diffs, and warnings relative to your currently installed version before committing to an update.
 * **Quick Links:** Jump directly to upstream URLs to check for breaking changes or new features.
+* **Partial Upgrade Prevention:** Guarantees system integrity by ensuring the local package database is never synchronized or modified during the initial scan or preview phase.
 * **Selective Updates:** Cherry-pick exactly which packages to upgrade and which to hold back.
 * **Version Pinning:** Permanently lock specific package versions to exclude them from future update cycles and ensure stability against accidental upgrades.
 * **Unified Management:** Handle both official `pacman` repositories and AUR packages in a single view.
@@ -17,11 +18,11 @@ Unlike standard helpers that blindly update everything, this utility focuses on 
 ## Screenshots
 
 ### Main Interface
-![Main UI Screenshot](https://raw.githubusercontent.com/chpock/arch-updater/assets/screenshot-ui-changelog.png)
+![Main UI Screenshot](assets/screenshot-ui-changelog.png)
 *The main view showing categorized packages, update status, and stability metrics.*
 
 ### Package Details & Issues
-![Issues UI Screenshot](https://raw.githubusercontent.com/chpock/arch-updater/assets/screenshot-ui-issues.png)
+![Issues UI Screenshot](assets/screenshot-ui-issues.png)
 *Detailed view showing specific issues and changelogs for a selected package.*
 
 ## Dependencies
