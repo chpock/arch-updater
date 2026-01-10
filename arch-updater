@@ -1318,7 +1318,7 @@ while true; do
             case "$PINNED_PACKAGE_LIST$UPGRADE_SKIP_LIST" in
                 *" $PACKAGE "*) : no-op;;
                 *)
-                    set -- "$@" "${PACKAGE}"
+                    set -- "$@" "aur/${PACKAGE}"
                     ;;
             esac
         fi
