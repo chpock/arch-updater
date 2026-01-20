@@ -1051,7 +1051,7 @@ while true; do
             [ -n "$RETRY_ISSUES_PACMAN" ] || break
 
             echo
-            echo "${YELLOW}Got rate limit for $(echo "$RETRY_ISSUES_PACMAN" | wc -w) packages. Retry limit info:${RESET}"
+            echo "${YELLOW}Got rate limit for $(echo "$RETRY_ISSUES_PACMAN" | wc -w) packages. Rate limit info:${RESET}"
 
             RETRY_AFTER=365
 
